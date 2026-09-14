@@ -87,6 +87,9 @@ final class HudView extends View {
       List<DriveFrame.Car> cars=new ArrayList<>(frame.cars);
       Collections.sort(cars,(a,b)->Float.compare(b.x,a.x));
       for(DriveFrame.Car car:cars){
+        // Vehicle-only mode: radar-only tracks can be guardrails, cones, or reflectors.
+        // Keep their blind-spot warning state, but never draw them as vehicle sprites.
+        if ("radarState".equals(car.source)) continue;
         if(!Float.isFinite(car.x)||!Float.isFinite(car.y)||car.x<1||car.x>150||car.p<.5f)continue;
         float w=Math.min(310,5000/(car.x+11.5f)),x=sx(car.y,car.x),y=sy(car.x);
         detectedVehicles.draw(c,x,y,w);
