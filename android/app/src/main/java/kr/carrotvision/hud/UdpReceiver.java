@@ -7,16 +7,35 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 final class UdpReceiver extends Thread {
+  private static final long FRAME_INTERVAL_MS = 33L;
+
   private final int port;
   private final Consumer<DriveFrame> callback;
   private final Handler main = new Handler(Looper.getMainLooper());
+  private final AtomicReference<DriveFrame> latestFrame = new AtomicReference<>();
+  private final AtomicBoolean deliveryScheduled = new AtomicBoolean(false);
   private volatile boolean running = true;
   private DatagramSocket socket;
 
-  UdpReceiver(int port, Consumer<DriveFrame> callback) { this.port = port; this.callback = callback; setName("CarrotUdp"); }
+  private final Runnable deliverLatest = new Runnable() {
+    @Override public void run() {
+      DriveFrame frame = latestFrame.getAndSet(null);
+      if (running && frame != null) callback.accept(frame);
+      deliveryScheduled.set(false);
+      if (running && latestFrame.get() != null) scheduleDelivery();
+    }
+  };
+
+  UdpReceiver(int port, Consumer<DriveFrame> callback) {
+    this.port = port;
+    this.callback = callback;
+    setName("CarrotUdp");
+  }
 
   @Override public void run() {
     byte[] buffer = new byte[65507];
@@ -29,13 +48,28 @@ final class UdpReceiver extends Thread {
           DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
           socket.receive(packet);
           String json = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
-          DriveFrame frame = DriveFrame.parse(new JSONObject(json));
-          main.post(() -> callback.accept(frame));
+          latestFrame.set(DriveFrame.parse(new JSONObject(json)));
+          scheduleDelivery();
         } catch (SocketTimeoutException ignored) { }
-          catch (org.json.JSONException | IllegalArgumentException invalid) { android.util.Log.w("CarrotVision", "Invalid or stale packet"); }
+          catch (org.json.JSONException | IllegalArgumentException invalid) {
+            android.util.Log.w("CarrotVision", "Invalid or stale packet");
+          }
       }
-    } catch (Exception error) { android.util.Log.e("CarrotVision", "UDP receiver stopped", error); }
+    } catch (Exception error) {
+      if (running) android.util.Log.e("CarrotVision", "UDP receiver stopped", error);
+    }
   }
 
-  void close() { running = false; if (socket != null) socket.close(); }
+  private void scheduleDelivery() {
+    if (deliveryScheduled.compareAndSet(false, true)) {
+      main.postDelayed(deliverLatest, FRAME_INTERVAL_MS);
+    }
+  }
+
+  void close() {
+    running = false;
+    latestFrame.set(null);
+    main.removeCallbacks(deliverLatest);
+    if (socket != null) socket.close();
+  }
 }
