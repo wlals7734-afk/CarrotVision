@@ -12,6 +12,16 @@ import java.util.*;
 
 final class HudView extends View {
   private final Paint p = new Paint(3);
+  private final Shader backgroundShader = new RadialGradient(768,780,1000,
+      new int[]{0xff252627,0xff101112,0xff0b0c0d},
+      new float[]{0,.72f,1},Shader.TileMode.CLAMP);
+  private final Shader pathShader = new LinearGradient(0,390,0,1000,
+      0x0024da5c,0xbb24da5c,Shader.TileMode.CLAMP);
+  private final Path drivingPath = new Path();
+  private final ArrayList<DriveFrame.Car> sortedCars = new ArrayList<>();
+  private static final Comparator<DriveFrame.Car> FAR_TO_NEAR =
+      (a,b)->Float.compare(b.x,a.x);
+  private final Runnable staleRefresh = this::invalidate;
   private final Bitmap reference;
   private final DetectedVehicleRenderer detectedVehicles;
   private final SharedPreferences preferences;
@@ -59,7 +69,9 @@ final class HudView extends View {
       DriveFrame.Line line=i<f.lanes.size()?f.lanes.get(i):null;
       laneTracks[i].update(line==null?0f:line.probability,line==null?null:line.points,now);
     }
+    removeCallbacks(staleRefresh);
     invalidate();
+    postDelayed(staleRefresh,1250);
   }
   private boolean live(){return frame!=null&&SystemClock.elapsedRealtime()-received<1200;}
   private float sx(float lateral,float distance){return ModelProjection.screenX(lateral,distance);}
@@ -76,7 +88,7 @@ final class HudView extends View {
     c.drawColor(Color.BLACK);float size=Math.min(getWidth(),getHeight());if(size<=0)return;
     int save=c.save();c.translate((getWidth()-size)/2,(getHeight()-size)/2);c.scale(size/1536,size/1536);
     c.clipRect(0,0,1536,1536);
-    p.setColor(Color.WHITE);p.setShader(new RadialGradient(768,780,1000,new int[]{0xff252627,0xff101112,0xff0b0c0d},new float[]{0,.72f,1},Shader.TileMode.CLAMP));
+    p.setColor(Color.WHITE);p.setShader(backgroundShader);
     c.drawRect(0,0,1536,1536,p);p.setShader(null);
 
     boolean connected=live();
@@ -84,15 +96,15 @@ final class HudView extends View {
     for(LaneTrack lane:laneTracks)drawLane(c,lane,SystemClock.elapsedRealtime());
     if(connected){
 
-      List<DriveFrame.Car> cars=new ArrayList<>(frame.cars);
-      Collections.sort(cars,(a,b)->Float.compare(b.x,a.x));
-      for(DriveFrame.Car car:cars){
+      sortedCars.clear();
+      sortedCars.addAll(frame.cars);
+      Collections.sort(sortedCars,FAR_TO_NEAR);
+      int first=Math.max(0,sortedCars.size()-8);
+      for(int i=first;i<sortedCars.size();i++){
+        DriveFrame.Car car=sortedCars.get(i);
         if(!Float.isFinite(car.x)||!Float.isFinite(car.y)||car.x<1||car.x>150||car.p<.5f)continue;
         float w=Math.min(310,5000/(car.x+11.5f)),x=sx(car.y,car.x),y=sy(car.x);
         detectedVehicles.draw(c,x,y,w);
-        p.setColor(0xff23ce4e);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(3);
-        c.drawRect(x-w*.56f,y-w*.93f,x+w*.56f,y+5,p);p.setStyle(Paint.Style.FILL);
-        text(c,Math.round(car.x)+" m",x,y+46,32,Color.WHITE,Paint.Align.CENTER);
       }
     }
     drawEgo(c);
@@ -111,7 +123,7 @@ final class HudView extends View {
       }
     }
     text(c,"내 차 길게 누르기 · 색상",768,1498,18,0xff65686b,Paint.Align.CENTER);
-    c.restoreToCount(save);postInvalidateDelayed(33);
+    c.restoreToCount(save);
   }
   private void drawTrafficLight(Canvas c,int state){
     // Compact horizontal housing, matching the signal preview layout.
@@ -136,11 +148,11 @@ final class HudView extends View {
   }
   private void drawPath(Canvas c){
     if(frame.path.size()<3)return;
-    Path a=new Path();boolean first=true;
+    Path a=drivingPath;a.rewind();boolean first=true;
     for(float[] q:frame.path)if(valid(q)){float x=sx(q[1]+.95f,q[0]),y=sy(q[0]);if(first){a.moveTo(x,y);first=false;}else a.lineTo(x,y);}
     if(first)return;
     for(int i=frame.path.size()-1;i>=0;i--){float[] q=frame.path.get(i);if(valid(q))a.lineTo(sx(q[1]-.95f,q[0]),sy(q[0]));}
-    a.close();p.setShader(new LinearGradient(0,390,0,1000,0x0024da5c,0xbb24da5c,Shader.TileMode.CLAMP));c.drawPath(a,p);p.setShader(null);
+    a.close();p.setShader(pathShader);c.drawPath(a,p);p.setShader(null);
   }
   private void drawLane(Canvas c,LaneTrack lane,long now){
     float opacity=lane.alpha(now);if(opacity<=0 || lane.points.size()<2)return;
