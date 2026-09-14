@@ -15,7 +15,7 @@ final class HudView extends View {
   private final Bitmap reference;
   private final DetectedVehicleRenderer detectedVehicles;
   private final SharedPreferences preferences;
-  private final String[] colors={"원본 차콜","화이트","실버","블랙","블루","레드"};
+  private final String[] colors={"차콜","화이트","실버","블랙","블루","레드"};
   private final int[] paints={0,0xffe5e8ea,0xffa0a6ad,0xff15171a,0xff245c9c,0xffa62e35};
   private int colorIndex;
   private DriveFrame frame;
@@ -23,17 +23,17 @@ final class HudView extends View {
   private float touchX,touchY;
   HudView(Context context) {
     super(context);
-    reference=BitmapFactory.decodeResource(getResources(),R.drawable.reference_ui);
+    reference=BitmapFactory.decodeResource(getResources(),R.drawable.ego_ev6_user);
     detectedVehicles=new DetectedVehicleRenderer(getResources());
     preferences=context.getSharedPreferences("appearance",Context.MODE_PRIVATE);
-    colorIndex=Math.max(0,Math.min(paints.length-1,preferences.getInt("carColor",1)));
+    colorIndex=Math.max(0,Math.min(paints.length-1,preferences.getInt("ev6CarColor",1)));
     setContentDescription("CarrotVision. 내 차량을 길게 눌러 색상 변경");
     setOnLongClickListener(v->{
       if(touchX<520||touchX>1010||touchY<750||touchY>1190)return false;
       if(live()&&frame.speed>1){Toast.makeText(context,"정차 후 색상을 변경해 주세요",Toast.LENGTH_SHORT).show();return true;}
       new AlertDialog.Builder(context).setTitle("내 차량 색상")
         .setSingleChoiceItems(colors,colorIndex,(dialog,which)->{
-          colorIndex=which;preferences.edit().putInt("carColor",which).apply();invalidate();dialog.dismiss();
+          colorIndex=which;preferences.edit().putInt("ev6CarColor",which).apply();invalidate();dialog.dismiss();
         }).setNegativeButton("닫기",null).show();
       return true;
     });
@@ -130,26 +130,34 @@ final class HudView extends View {
     p.setStyle(Paint.Style.FILL);
   }
   private void drawEgo(Canvas c){
-    int s=c.save();
-    Path silhouette=polygon(550,826,569,818,593,823,614,791,635,776,693,769,832,770,894,780,916,816,922,828,945,819,976,827,978,836,962,846,941,844,962,901,983,975,987,1060,976,1146,965,1167,932,1168,917,1154,588,1154,578,1167,550,1161,543,1122,541,1027,552,966,572,903,590,844,564,847,552,843);
-    c.clipPath(silhouette);p.setColor(Color.WHITE);c.drawBitmap(reference,0,0,p);
-    if(colorIndex!=0){
+    int save=c.save();
+    // Preserve source aspect ratio and place the wheels at the existing ego anchor.
+    float scale=440f/1448f;
+    c.translate(548,1168-1370*scale);c.scale(scale,scale);c.translate(-44,-84);
+    Path silhouette=polygon(64,295,82,278,135,260,190,251,211,259,225,276,219,308,
+      249,275,290,207,344,136,373,113,414,103,578,88,768,84,959,88,1122,103,
+      1164,113,1193,136,1246,207,1287,275,1317,308,1311,276,1325,259,1346,251,
+      1401,260,1454,278,1472,295,1470,336,1457,351,1425,359,1358,361,1346,356,
+      1376,490,1416,617,1450,678,1470,747,1483,837,1488,1040,1492,1265,
+      1482,1403,1467,1436,1433,1453,1347,1453,1320,1438,1289,1391,
+      1129,1390,960,1402,768,1403,576,1402,407,1390,247,1391,
+      216,1438,189,1453,103,1453,69,1436,54,1403,44,1265,48,1040,
+      53,837,66,747,86,678,120,617,160,490,190,356,178,361,111,359,79,351,66,336);
+    c.clipPath(silhouette);p.setColor(Color.WHITE);p.setShader(null);p.setStyle(Paint.Style.FILL);
+    p.setColorFilter(null);c.drawBitmap(reference,0,0,p);
+    if(colorIndex!=1){
       int body=c.save();
-      Path mask=polygon(598,821,632,779,691,772,831,774,891,782,919,833,906,856,883,846,651,845,629,858);
-      mask.addPath(polygon(594,850,613,864,625,929,613,975,564,994,555,972,578,896));
-      mask.addPath(polygon(913,851,930,850,960,915,978,975,952,995,918,975,907,928));
-      mask.addPath(polygon(619,960,910,960,921,978,609,978));
-      mask.addPath(polygon(564,1013,588,1023,945,1023,969,1011,961,1055,927,1078,606,1079,568,1056));
-      mask.addPath(polygon(571,1080,605,1090,929,1090,961,1078,958,1102,923,1118,607,1118,576,1106));
-      c.clipPath(mask);
-      int col=paints[colorIndex];
-      // Repaint body panels while preserving source shading, glass, tyres and red lights.
-      float lift=colorIndex==1?125:colorIndex==2?65:colorIndex==3?-15:15;
-      float r=Color.red(col)/255f,g=Color.green(col)/255f,b=Color.blue(col)/255f;
-      p.setColorFilter(new ColorMatrixColorFilter(new float[]{r,0,0,0,lift*r,0,g,0,0,lift*g,0,0,b,0,lift*b,0,0,0,1,0}));
-      c.drawBitmap(reference,0,0,p);p.setColorFilter(null);c.restoreToCount(body);
+      Path panels=polygon(414,227,590,203,946,203,1122,227,1130,365,1190,385,
+        1240,442,1215,477,321,477,296,442,346,385,406,365);
+      panels.addPath(polygon(296,840,1240,840,1230,1034,1200,1107,336,1107,306,1034));
+      panels.addPath(polygon(182,365,218,367,287,487,270,724,250,798,64,851,86,703,128,612));
+      panels.addPath(polygon(1354,365,1318,367,1249,487,1266,724,1286,798,1472,851,1450,703,1408,612));
+      c.clipPath(panels);
+      int color=colorIndex==0?0xff454950:paints[colorIndex];
+      p.setColorFilter(new LightingColorFilter(color,0));c.drawBitmap(reference,0,0,p);
+      p.setColorFilter(null);c.restoreToCount(body);
     }
-    c.restoreToCount(s);
+    c.restoreToCount(save);
   }
   private void drawWheel(Canvas c,boolean enabled){
     p.setColor(enabled?0xff13df4e:0xff73777b);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(10);
