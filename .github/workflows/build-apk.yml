@@ -24,6 +24,10 @@ jobs:
           mkdir -p /tmp/carrot-lane-check
           javac -d /tmp/carrot-lane-check android/app/src/main/java/kr/carrotvision/hud/LaneTrack.java android/validation/LaneTrackCheck.java
           java -cp /tmp/carrot-lane-check kr.carrotvision.hud.LaneTrackCheck
+      - name: Verify model coordinate directions
+        run: |
+          javac -d /tmp/carrot-lane-check android/app/src/main/java/kr/carrotvision/hud/ModelProjection.java android/validation/ModelProjectionCheck.java
+          java -cp /tmp/carrot-lane-check kr.carrotvision.hud.ModelProjectionCheck
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'

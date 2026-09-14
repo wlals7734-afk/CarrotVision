@@ -62,7 +62,7 @@ final class HudView extends View {
     invalidate();
   }
   private boolean live(){return frame!=null&&SystemClock.elapsedRealtime()-received<1200;}
-  private float sx(float lateral,float distance){return 768-lateral*2300/(distance+6);}
+  private float sx(float lateral,float distance){return ModelProjection.screenX(lateral,distance);}
   private float sy(float distance){return 250+5580/(distance+6);}
   private boolean valid(float[] q){return Float.isFinite(q[0])&&Float.isFinite(q[1])&&q[0]>=0&&q[0]<=150;}
   private Path polygon(float... xy){
