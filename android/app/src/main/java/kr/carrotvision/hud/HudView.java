@@ -13,6 +13,7 @@ import java.util.*;
 final class HudView extends View {
   private final Paint p = new Paint(3);
   private final Bitmap reference;
+  private final DetectedVehicleRenderer detectedVehicles;
   private final SharedPreferences preferences;
   private final String[] colors={"원본 차콜","화이트","실버","블랙","블루","레드"};
   private final int[] paints={0,0xffe5e8ea,0xffa0a6ad,0xff15171a,0xff245c9c,0xffa62e35};
@@ -23,6 +24,7 @@ final class HudView extends View {
   HudView(Context context) {
     super(context);
     reference=BitmapFactory.decodeResource(getResources(),R.drawable.reference_ui);
+    detectedVehicles=new DetectedVehicleRenderer(getResources());
     preferences=context.getSharedPreferences("appearance",Context.MODE_PRIVATE);
     colorIndex=Math.max(0,Math.min(paints.length-1,preferences.getInt("carColor",1)));
     setContentDescription("CarrotVision. 내 차량을 길게 눌러 색상 변경");
@@ -73,7 +75,7 @@ final class HudView extends View {
       for(DriveFrame.Car car:cars){
         if(!Float.isFinite(car.x)||!Float.isFinite(car.y)||car.x<1||car.x>150||car.p<.5f)continue;
         float w=Math.min(310,5000/(car.x+11.5f)),x=sx(car.y,car.x),y=sy(car.x);
-        drawLead(c,x,y,w);
+        detectedVehicles.draw(c,x,y,w);
         p.setColor(0xff23ce4e);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(3);
         c.drawRect(x-w*.56f,y-w*.93f,x+w*.56f,y+5,p);p.setStyle(Paint.Style.FILL);
         text(c,Math.round(car.x)+" m",x,y+46,32,Color.WHITE,Paint.Align.CENTER);
@@ -126,11 +128,6 @@ final class HudView extends View {
       if(last!=null){p.setStrokeWidth(Math.max(1,50/(q[0]+6)));c.drawLine(sx(last[1],last[0]),sy(last[0]),sx(q[1],q[0]),sy(q[0]),p);}last=q;
     }
     p.setStyle(Paint.Style.FILL);
-  }
-  private void drawLead(Canvas c,float x,float y,float w){
-    int s=c.save();c.translate(x-w/2,y-w*.82f);c.scale(w/112,w/112);c.translate(-713,-317);
-    c.clipPath(polygon(728,321,744,317,799,318,810,326,816,343,823,348,822,388,817,399,718,399,713,391,714,349,721,341));
-    p.setColor(Color.WHITE);c.drawBitmap(reference,0,0,p);c.restoreToCount(s);
   }
   private void drawEgo(Canvas c){
     int s=c.save();
