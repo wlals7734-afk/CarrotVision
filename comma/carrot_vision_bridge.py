@@ -47,8 +47,51 @@ def active_state(sm, now):
                 return enabled
     return False
 
+def optional_field(obj, name, default=None):
+    try:
+        return getattr(obj, name)
+    except AttributeError:
+        return default
+
+def radar_cars(state):
+    # Same track lists used by carrotpilot's road_overlay_lead_model.js.
+    tracks = []
+    for name in ("leadsLeft", "leadsRight", "leadsCenter"):
+        tracks.extend(optional_field(state, name, ()))
+    if not tracks:
+        tracks = [optional_field(state, name) for name in
+                  ("leadOne", "leadTwo", "leadLeft", "leadRight")]
+    result, seen_ids = [], set()
+    for track in tracks:
+        if track is None or not optional_field(track, "status", False):
+            continue
+        try:
+            x = float(track.dRel)
+            # Radar Y is positive LEFT; model/UI Y is positive RIGHT.
+            y = -float(track.yRel)
+            if not (math.isfinite(x) and math.isfinite(y) and 1 <= x <= 150):
+                continue
+            track_id = int(optional_field(track, "radarTrackId", -1))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            continue
+        if track_id >= 0 and track_id in seen_ids:
+            continue
+        if track_id < 0 and any(abs(c["x"]-x) < .25 and abs(c["y"]-y) < .15 for c in result):
+            continue
+        if track_id >= 0:
+            seen_ids.add(track_id)
+        # p is display validity, not an invented model confidence.
+        result.append(dict(x=x, y=y, p=1.0, source="radarState"))
+    return result
+
+def merge_cars(vision, radar):
+    # Suppress the vision duplicate of the same forward radar vehicle.
+    return radar + [v for v in vision if not any(
+        abs(v["x"]-r["x"]) < max(3.0, .1*r["x"]) and
+        abs(v["y"]-r["y"]) < 1.0 for r in radar)]
+
 def main():
-    services = ["carState", "modelV2", "controlsState"]
+    services = ["carState", "modelV2", "controlsState", "radarState"]
     try:
         from cereal.services import SERVICE_LIST
         if "selfdriveState" in SERVICE_LIST:
@@ -57,7 +100,7 @@ def main():
         pass
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.2 started; waiting for fresh vehicle/model data", flush=True)
+    print("CarrotVision bridge v2.3 started; side radar tracks enabled", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     target = (os.environ.get("CARROT_VISION_HOST", "255.255.255.255"),
@@ -79,6 +122,9 @@ def main():
                 x, y = float(lead.x[0]), float(lead.y[0])
                 if math.isfinite(x) and math.isfinite(y) and 1 <= x <= 150:
                     cars.append(dict(x=x, y=y, p=float(lead.prob), source="vision"))
+        # Never display cached radar tracks as current detections.
+        if fresh(sm, "radarState", now):
+            cars = merge_cars(cars, radar_cars(sm["radarState"]))
         lanes = [dict(p=float(prob), pts=points(line))
                  for line, prob in zip(model.laneLines, model.laneLineProbs)]
         packet = dict(version=2, fresh=True, time=int(time.time()*1000),
@@ -100,4 +146,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
