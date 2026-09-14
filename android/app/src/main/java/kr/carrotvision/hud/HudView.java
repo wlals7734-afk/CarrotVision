@@ -19,6 +19,7 @@ final class HudView extends View {
   private final int[] paints={0,0xffe5e8ea,0xffa0a6ad,0xff15171a,0xff245c9c,0xffa62e35};
   private int colorIndex;
   private DriveFrame frame;
+  private final LaneTrack[] laneTracks={new LaneTrack(),new LaneTrack(),new LaneTrack(),new LaneTrack()};
   private long received;
   private long indicatorStart;
   private int indicatorMask;
@@ -53,7 +54,12 @@ final class HudView extends View {
   void setFrame(DriveFrame f){
     long now=SystemClock.elapsedRealtime();int next=(f.leftBlinker?1:0)|(f.rightBlinker?2:0);
     if(next!=indicatorMask || now-received>=1200)indicatorStart=now;
-    indicatorMask=next;frame=f;received=now;invalidate();
+    indicatorMask=next;frame=f;received=now;
+    for(int i=0;i<laneTracks.length;i++){
+      DriveFrame.Line line=i<f.lanes.size()?f.lanes.get(i):null;
+      laneTracks[i].update(line==null?0f:line.probability,line==null?null:line.points,now);
+    }
+    invalidate();
   }
   private boolean live(){return frame!=null&&SystemClock.elapsedRealtime()-received<1200;}
   private float sx(float lateral,float distance){return 768-lateral*2300/(distance+6);}
@@ -72,11 +78,12 @@ final class HudView extends View {
     c.clipRect(0,0,1536,1536);
     p.setColor(Color.WHITE);p.setShader(new RadialGradient(768,780,1000,new int[]{0xff252627,0xff101112,0xff0b0c0d},new float[]{0,.72f,1},Shader.TileMode.CLAMP));
     c.drawRect(0,0,1536,1536,p);p.setShader(null);
-    drawRoad(c);
+
     boolean connected=live();
+    if(connected)drawPath(c);
+    for(LaneTrack lane:laneTracks)drawLane(c,lane,SystemClock.elapsedRealtime());
     if(connected){
-      drawPath(c);
-      for(DriveFrame.Line line:frame.lanes)drawLane(c,line);
+
       List<DriveFrame.Car> cars=new ArrayList<>(frame.cars);
       Collections.sort(cars,(a,b)->Float.compare(b.x,a.x));
       for(DriveFrame.Car car:cars){
@@ -102,23 +109,8 @@ final class HudView extends View {
         if(frame.rightBlinker)text(c,"▶",1051,990,40,0xff20dd61,Paint.Align.CENTER);
       }
     }
-    // The underlying straight road is a decorative perspective grid, not detected lanes.
     text(c,"내 차 길게 누르기 · 색상",768,1498,18,0xff65686b,Paint.Align.CENTER);
     c.restoreToCount(save);postInvalidateDelayed(33);
-  }
-  private void drawRoad(Canvas c){
-    p.setShader(new LinearGradient(0,250,0,1300,new int[]{0x00ffffff,0xffdddddd,0xffdddddd,0x00ffffff},new float[]{0,.23f,.82f,1},Shader.TileMode.CLAMP));
-    c.drawPath(polygon(602,250,0,546,0,558),p);
-    c.drawPath(polygon(934,250,1536,546,1536,558),p);
-    for(int side:new int[]{-1,1}){
-      for(float d=2;d<120;d+=7){
-        float a=sy(d),b=sy(d+3.6f);
-        float xa=sx(side*1.8f,d),xb=sx(side*1.8f,d+3.6f);
-        float wa=65/(d+6),wb=65/(d+9.6f);
-        c.drawPath(polygon(xa-wa,a,xa+wa,a,xb+wb,b,xb-wb,b),p);
-      }
-    }
-    p.setShader(null);
   }
   private void drawPath(Canvas c){
     if(frame.path.size()<3)return;
@@ -128,13 +120,17 @@ final class HudView extends View {
     for(int i=frame.path.size()-1;i>=0;i--){float[] q=frame.path.get(i);if(valid(q))a.lineTo(sx(q[1]-.95f,q[0]),sy(q[0]));}
     a.close();p.setShader(new LinearGradient(0,390,0,1000,0x0024da5c,0xbb24da5c,Shader.TileMode.CLAMP));c.drawPath(a,p);p.setShader(null);
   }
-  private void drawLane(Canvas c,DriveFrame.Line line){
-    if(line.probability<.5f)return;
-    p.setColor(0xbbe5e7e8);p.setStyle(Paint.Style.STROKE);float[] last=null;
-    for(float[] q:line.points)if(valid(q)){
+  private void drawLane(Canvas c,LaneTrack lane,long now){
+    float opacity=lane.alpha(now);if(opacity<=0 || lane.points.size()<2)return;
+    p.setShader(null);p.setColorFilter(null);p.setColor(0xffe5e7e8);
+    p.setAlpha(Math.round(220*opacity));p.setStyle(Paint.Style.STROKE);
+    p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
+    float[] last=null;
+    // Connect the measured points at their actual lateral positions, including bends.
+    for(float[] q:lane.points){
       if(last!=null){p.setStrokeWidth(Math.max(1,50/(q[0]+6)));c.drawLine(sx(last[1],last[0]),sy(last[0]),sx(q[1],q[0]),sy(q[0]),p);}last=q;
     }
-    p.setStyle(Paint.Style.FILL);
+    p.setAlpha(255);p.setStrokeCap(Paint.Cap.BUTT);p.setStyle(Paint.Style.FILL);
   }
   private void drawEgo(Canvas c){
     int save=c.save();

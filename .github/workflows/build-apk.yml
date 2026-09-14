@@ -19,6 +19,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Verify lane visibility transitions
+        run: |
+          mkdir -p /tmp/carrot-lane-check
+          javac -d /tmp/carrot-lane-check android/app/src/main/java/kr/carrotvision/hud/LaneTrack.java android/validation/LaneTrackCheck.java
+          java -cp /tmp/carrot-lane-check kr.carrotvision.hud.LaneTrackCheck
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
