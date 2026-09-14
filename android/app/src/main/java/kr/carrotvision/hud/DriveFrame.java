@@ -6,11 +6,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class DriveFrame {
-  static final class Car { float x, y, v, p; String source; }
+  static final class Car { float x, y, v, p; String source, type; }
   static final class Line { float probability; List<float[]> points = new ArrayList<>(); }
   long time;
   float speed, steering;
-  boolean enabled, leftBlinker, rightBlinker, leftBlindspot, rightBlindspot;
+  boolean brakeLights, enabled, leftBlinker, rightBlinker, leftBlindspot, rightBlindspot;
   List<Car> cars = new ArrayList<>();
   List<Line> lanes = new ArrayList<>();
   List<float[]> path = new ArrayList<>();
@@ -22,6 +22,7 @@ final class DriveFrame {
     f.speed = (float) j.optDouble("speed", 0);
     f.steering = (float) j.optDouble("steering", 0);
     f.enabled = j.optBoolean("enabled");
+    f.brakeLights = j.optBoolean("brakeLights", false);
     f.leftBlinker = j.optBoolean("leftBlinker");
     f.rightBlinker = j.optBoolean("rightBlinker");
     f.leftBlindspot = j.optBoolean("leftBlindspot");
@@ -35,7 +36,7 @@ final class DriveFrame {
     JSONArray cars = j.optJSONArray("cars");
     if (cars != null) for (int i=0; i<cars.length(); i++) {
       JSONObject o = cars.optJSONObject(i); if (o == null) continue;
-      Car c = new Car(); c.x=(float)o.optDouble("x"); c.y=(float)o.optDouble("y"); c.v=(float)o.optDouble("v"); c.p=(float)o.optDouble("p"); c.source=o.optString("source"); f.cars.add(c);
+      Car c = new Car(); c.x=(float)o.optDouble("x"); c.y=(float)o.optDouble("y"); c.v=(float)o.optDouble("v"); c.p=(float)o.optDouble("p"); c.source=o.optString("source"); c.type=o.optString("type","car"); f.cars.add(c);
     }
     return f;
   }

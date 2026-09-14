@@ -20,6 +20,9 @@ final class HudView extends View {
   private int colorIndex;
   private DriveFrame frame;
   private long received;
+  private long indicatorStart;
+  private int indicatorMask;
+  private float brakeGlow;
   private float touchX,touchY;
   HudView(Context context) {
     super(context);
@@ -47,7 +50,11 @@ final class HudView extends View {
     }
     return super.onTouchEvent(e);
   }
-  void setFrame(DriveFrame f){frame=f;received=SystemClock.elapsedRealtime();invalidate();}
+  void setFrame(DriveFrame f){
+    long now=SystemClock.elapsedRealtime();int next=(f.leftBlinker?1:0)|(f.rightBlinker?2:0);
+    if(next!=indicatorMask || now-received>=1200)indicatorStart=now;
+    indicatorMask=next;frame=f;received=now;invalidate();
+  }
   private boolean live(){return frame!=null&&SystemClock.elapsedRealtime()-received<1200;}
   private float sx(float lateral,float distance){return 768-lateral*2300/(distance+6);}
   private float sy(float distance){return 250+5580/(distance+6);}
@@ -157,7 +164,32 @@ final class HudView extends View {
       p.setColorFilter(new LightingColorFilter(color,0));c.drawBitmap(reference,0,0,p);
       p.setColorFilter(null);c.restoreToCount(body);
     }
+    drawEgoLights(c);
     c.restoreToCount(save);
+  }
+  // Illustration of received state, not a simulation of physical lamp timing.
+  private void drawEgoLights(Canvas c){
+    boolean fresh=live();
+    float target=fresh && frame.brakeLights?1f:0f;
+    brakeGlow=fresh?brakeGlow+(target-brakeGlow)*.45f:0f;
+    if(brakeGlow>.01f){
+      Path rear=new Path();rear.moveTo(76,868);rear.cubicTo(155,823,228,817,300,817);
+      rear.lineTo(1236,817);rear.cubicTo(1308,817,1381,823,1460,868);
+      lamp(c,rear,0xffff2424,brakeGlow,18);
+      Path high=new Path();high.moveTo(475,488);high.lineTo(1060,488);
+      lamp(c,high,0xffff2424,brakeGlow,8);
+    }
+    if(fresh && (SystemClock.elapsedRealtime()-indicatorStart)%900<450){
+      if(frame.leftBlinker){Path left=new Path();left.moveTo(81,866);left.cubicTo(147,831,220,817,279,819);lamp(c,left,0xffffa800,1f,24);}
+      if(frame.rightBlinker){Path right=new Path();right.moveTo(1257,819);right.cubicTo(1316,817,1389,831,1455,866);lamp(c,right,0xffffa800,1f,24);}
+    }
+  }
+  private void lamp(Canvas c,Path shape,int color,float intensity,float width){
+    p.setColorFilter(null);p.setShader(null);p.setStyle(Paint.Style.STROKE);p.setStrokeCap(Paint.Cap.ROUND);
+    p.setColor(color);p.setAlpha(Math.round(38*intensity));p.setStrokeWidth(width*3);c.drawPath(shape,p);
+    p.setAlpha(Math.round(240*intensity));p.setStrokeWidth(width);c.drawPath(shape,p);
+    p.setColor(Color.WHITE);p.setAlpha(Math.round(145*intensity));p.setStrokeWidth(width*.22f);c.drawPath(shape,p);
+    p.setAlpha(255);p.setStrokeCap(Paint.Cap.BUTT);p.setStyle(Paint.Style.FILL);
   }
   private void drawWheel(Canvas c,boolean enabled){
     p.setColor(enabled?0xff13df4e:0xff73777b);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(10);

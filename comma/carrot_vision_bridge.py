@@ -57,7 +57,7 @@ def main():
         pass
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.1 started; waiting for fresh vehicle/model data", flush=True)
+    print("CarrotVision bridge v2.2 started; waiting for fresh vehicle/model data", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     target = (os.environ.get("CARROT_VISION_HOST", "255.255.255.255"),
@@ -84,6 +84,7 @@ def main():
         packet = dict(version=2, fresh=True, time=int(time.time()*1000),
                       speed=float(cs.vEgo)*3.6, steering=float(cs.steeringAngleDeg),
                       enabled=active_state(sm, now),
+                      brakeLights=optional_bool(cs, "brakeLights"),
                       leftBlinker=bool(cs.leftBlinker), rightBlinker=bool(cs.rightBlinker),
                       leftBlindspot=bool(getattr(cs,"leftBlindspot",False)),
                       rightBlindspot=bool(getattr(cs,"rightBlindspot",False)),
@@ -99,3 +100,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
