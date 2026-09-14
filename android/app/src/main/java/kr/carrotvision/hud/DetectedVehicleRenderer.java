@@ -4,28 +4,56 @@ import android.content.res.Resources;
 import android.graphics.*;
 
 /**
- * Original HDA2-inspired neutral symbol for detected traffic.
- * The bridge does not claim a vehicle class, so every valid track uses one
- * deliberately simple tofu/block silhouette instead of guessing car types.
+ * HDA2-inspired neutral symbol for detected traffic.
+ *
+ * The shaded symbols are rasterized once and then scaled by the GPU. This keeps
+ * the original appearance while avoiding gradients and Path allocations for
+ * every vehicle on every frame.
  */
 final class DetectedVehicleRenderer {
-  private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+  private static final int LOGICAL_WIDTH = 128;
+  private static final int LOGICAL_HEIGHT = 96;
+  private static final int RASTER_SCALE = 3;
+  private static final float MODEL_BOTTOM = 80f;
+
+  private final Paint bitmapPaint =
+      new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+  private final RectF destination = new RectF();
+  private final Bitmap left;
+  private final Bitmap center;
+  private final Bitmap right;
 
   DetectedVehicleRenderer(Resources ignored) {
-    paint.setStrokeJoin(Paint.Join.ROUND);
-    paint.setStrokeCap(Paint.Cap.ROUND);
+    left = buildSprite(-7f);
+    center = buildSprite(0f);
+    right = buildSprite(7f);
   }
 
   void draw(Canvas canvas, float x, float bottom, float width) {
     if (!Float.isFinite(x) || !Float.isFinite(bottom) || !Float.isFinite(width) || width <= 0) return;
 
-    int save = canvas.save();
-    canvas.translate(x, bottom);
-    canvas.scale(width / 100f, width / 100f);
+    Bitmap sprite = x < 620f ? left : x > 916f ? right : center;
+    float halfWidth = width * .5f;
+    float top = bottom - width * (MODEL_BOTTOM / LOGICAL_WIDTH);
+    float imageBottom = bottom + width * ((LOGICAL_HEIGHT - MODEL_BOTTOM) / LOGICAL_WIDTH);
+    destination.set(x - halfWidth, top, x + halfWidth, imageBottom);
+    canvas.drawBitmap(sprite, null, destination, bitmapPaint);
+  }
 
-    float skew = Math.max(-8f, Math.min(8f, (x - 768f) / 75f));
+  private static Bitmap buildSprite(float skew) {
+    Bitmap bitmap = Bitmap.createBitmap(
+        LOGICAL_WIDTH * RASTER_SCALE,
+        LOGICAL_HEIGHT * RASTER_SCALE,
+        Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(bitmap);
+    canvas.scale(RASTER_SCALE, RASTER_SCALE);
+    canvas.translate(LOGICAL_WIDTH * .5f, MODEL_BOTTOM);
 
+    Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
+    paint.setStrokeJoin(Paint.Join.ROUND);
+    paint.setStrokeCap(Paint.Cap.ROUND);
     paint.setStyle(Paint.Style.FILL);
+
     paint.setShader(new RadialGradient(0, -1, 62,
         new int[]{0x72000000, 0x26000000, 0x00000000},
         new float[]{0f, .58f, 1f}, Shader.TileMode.CLAMP));
@@ -66,12 +94,9 @@ final class DetectedVehicleRenderer {
     canvas.drawPath(glass, paint);
     paint.setShader(null);
 
-    Path side;
-    if (skew >= 0) {
-      side = polygon(31, -48, 42, -57, 49, -57, 46, -7, 39, 0, 32, -9);
-    } else {
-      side = polygon(-31, -48, -42, -57, -49, -57, -46, -7, -39, 0, -32, -9);
-    }
+    Path side = skew >= 0
+        ? polygon(31, -48, 42, -57, 49, -57, 46, -7, 39, 0, 32, -9)
+        : polygon(-31, -48, -42, -57, -49, -57, -46, -7, -39, 0, -32, -9);
     paint.setShader(new LinearGradient(skew >= 0 ? 28 : -49, -45,
         skew >= 0 ? 49 : -28, -8, 0xff858c92, 0xff4e555b, Shader.TileMode.CLAMP));
     canvas.drawPath(side, paint);
@@ -91,9 +116,8 @@ final class DetectedVehicleRenderer {
     canvas.drawLine(-40, -57, 40, -57, paint);
     paint.setColor(0x88777e84);
     canvas.drawLine(-36, -1, 36, -1, paint);
-    paint.setStyle(Paint.Style.FILL);
 
-    canvas.restoreToCount(save);
+    return bitmap;
   }
 
   private static Path polygon(float... xy) {
