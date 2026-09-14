@@ -16,6 +16,23 @@ def track(x, y, ident=-1, status=True):
     return Obj(dRel=x, yRel=y, radarTrackId=ident, status=status)
 
 class BridgeTracksTest(unittest.TestCase):
+    def test_traffic_state(self):
+        class State:
+            recv_time = {"longitudinalPlan": 10}
+            seen = {"longitudinalPlan": True}
+            valid = {"longitudinalPlan": True}
+            plan = Obj(trafficState=0)
+            def __getitem__(self, key):
+                return self.plan
+        sm = State()
+        for value, expected in ((0,0),(1,1),(2,2),(3,0),(1001,0)):
+            sm.plan.trafficState = value
+            self.assertEqual(namespace["traffic_state"](sm,10.1),expected)
+        sm.plan.trafficState = 1
+        self.assertEqual(namespace["traffic_state"](sm,11),0)
+        sm.plan = Obj()
+        self.assertEqual(namespace["traffic_state"](sm,10.1),0)
+
     def test_side_coordinates_and_duplicates(self):
         left, right = track(20, 3.5, 7), track(25, -3.5, 8)
         cars = radar_cars(Obj(leadsLeft=[left], leadsRight=[right], leadsCenter=[left]))

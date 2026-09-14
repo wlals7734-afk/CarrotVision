@@ -90,8 +90,16 @@ def merge_cars(vision, radar):
         abs(v["x"]-r["x"]) < max(3.0, .1*r["x"]) and
         abs(v["y"]-r["y"]) < 1.0 for r in radar)]
 
+def traffic_state(sm, now):
+    # Matches carrotpilot selfdrive/ui/mici/onroad/traffic_light.py.
+    if fresh(sm, "longitudinalPlan", now):
+        state = optional_field(sm["longitudinalPlan"], "trafficState", 0)
+        if state in (1, 2):
+            return int(state)
+    return 0
+
 def main():
-    services = ["carState", "modelV2", "controlsState", "radarState"]
+    services = ["carState", "modelV2", "controlsState", "radarState", "longitudinalPlan"]
     try:
         from cereal.services import SERVICE_LIST
         if "selfdriveState" in SERVICE_LIST:
@@ -100,7 +108,7 @@ def main():
         pass
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.3 started; side radar tracks enabled", flush=True)
+    print("CarrotVision bridge v2.4 started; side tracks and traffic state enabled", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     target = (os.environ.get("CARROT_VISION_HOST", "255.255.255.255"),
@@ -128,6 +136,7 @@ def main():
         lanes = [dict(p=float(prob), pts=points(line))
                  for line, prob in zip(model.laneLines, model.laneLineProbs)]
         packet = dict(version=2, fresh=True, time=int(time.time()*1000),
+                      trafficState=traffic_state(sm, now),
                       speed=float(cs.vEgo)*3.6, steering=float(cs.steeringAngleDeg),
                       enabled=active_state(sm, now),
                       brakeLights=optional_bool(cs, "brakeLights"),

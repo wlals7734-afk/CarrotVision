@@ -96,6 +96,7 @@ final class HudView extends View {
       }
     }
     drawEgo(c);
+    drawTrafficLight(c,connected?frame.trafficState:0);
     text(c,connected?String.valueOf(Math.round(frame.speed)):"—",80,1390,148,Color.WHITE,Paint.Align.LEFT);
     text(c,"km/h",90,1450,49,0xff999b9d,Paint.Align.LEFT);
     drawWheel(c,connected&&frame.enabled);
@@ -111,6 +112,27 @@ final class HudView extends View {
     }
     text(c,"내 차 길게 누르기 · 색상",768,1498,18,0xff65686b,Paint.Align.CENTER);
     c.restoreToCount(save);postInvalidateDelayed(33);
+  }
+  private void drawTrafficLight(Canvas c,int state){
+    // Compact horizontal housing, matching the signal preview layout.
+    p.setStyle(Paint.Style.FILL);p.setShader(null);p.setColor(0xff303438);
+    c.drawRoundRect(1160,90,1470,208,42,42,p);
+    p.setColor(0xff121416);c.drawRoundRect(1164,94,1466,204,39,39,p);
+    int[] colors={0xffff3434,0xffffba28,0xff27e765};
+    for(int i=0;i<3;i++){
+      float x=1217+i*98,y=149;
+      boolean on=(i==0&&state==1)||(i==2&&state==2);
+      p.setColor(0xff08090a);c.drawCircle(x,y,43,p);
+      p.setShader(new RadialGradient(x-8,y-10,48,
+        on?new int[]{Color.WHITE,colors[i],0xff171a1c}:new int[]{0xff303438,0xff202326,0xff111315},
+        new float[]{0,.35f,1},Shader.TileMode.CLAMP));
+      c.drawCircle(x,y,35,p);p.setShader(null);
+      // LED texture stays legible at the app's small on-screen size.
+      p.setColor(on?0xaaffffff:0xff34383b);
+      for(int row=-3;row<=3;row++)for(int col=-3;col<=3;col++)
+        if(row*row+col*col<=10)c.drawCircle(x+col*8,y+row*8,1.7f,p);
+    }
+    text(c,"당근 판단 · "+(state==1?"정지":state==2?"진행":"대기"),1315,241,24,0xffbdc2c6,Paint.Align.CENTER);
   }
   private void drawPath(Canvas c){
     if(frame.path.size()<3)return;

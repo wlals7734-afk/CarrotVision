@@ -9,6 +9,7 @@ final class DriveFrame {
   static final class Car { float x, y, v, p; String source, type; }
   static final class Line { float probability; List<float[]> points = new ArrayList<>(); }
   long time;
+  int trafficState;
   float speed, steering;
   boolean brakeLights, enabled, leftBlinker, rightBlinker, leftBlindspot, rightBlindspot;
   List<Car> cars = new ArrayList<>();
@@ -19,6 +20,8 @@ final class DriveFrame {
     if (j.optInt("version") != 2 || !j.optBoolean("fresh")) throw new IllegalArgumentException("Bridge v2 with fresh data required");
     DriveFrame f = new DriveFrame();
     f.time = j.optLong("time", System.currentTimeMillis());
+    int traffic = j.optInt("trafficState", 0);
+    f.trafficState = traffic == 1 || traffic == 2 ? traffic : 0;
     f.speed = (float) j.optDouble("speed", 0);
     f.steering = (float) j.optDouble("steering", 0);
     f.enabled = j.optBoolean("enabled");
