@@ -108,7 +108,7 @@ final class HudView extends View {
       }
     }
     drawEgo(c);
-    drawTrafficLight(c,connected?frame.trafficState:0);
+    if(connected && (frame.trafficState==1 || frame.trafficState==2)) drawTrafficLight(c,frame.trafficState);
     text(c,connected?String.valueOf(Math.round(frame.speed)):"—",80,1390,148,Color.WHITE,Paint.Align.LEFT);
     text(c,"km/h",90,1450,49,0xff999b9d,Paint.Align.LEFT);
     drawWheel(c,connected&&frame.enabled);
@@ -126,6 +126,7 @@ final class HudView extends View {
     c.restoreToCount(save);
   }
   private void drawTrafficLight(Canvas c,int state){
+    if(state!=1 && state!=2)return;
     // Compact horizontal housing, matching the signal preview layout.
     p.setStyle(Paint.Style.FILL);p.setShader(null);p.setColor(0xff303438);
     c.drawRoundRect(1160,90,1470,208,42,42,p);
