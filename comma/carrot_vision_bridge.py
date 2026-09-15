@@ -53,14 +53,21 @@ def optional_field(obj, name, default=None):
     except AttributeError:
         return default
 
-def radar_cars(state):
-    # Same track lists used by carrotpilot's road_overlay_lead_model.js.
+def radar_cars(state, min_abs_speed=3.0, min_model_prob=0.55):
+    """Return only plausible vehicle tracks from radarState.
+
+    CarrotPilot's own radar overlay treats low-speed radar points as clutter-like
+    information rather than normal moving vehicles.  Road furniture such as
+    barriers, signs, trees and cones is commonly stationary in ground speed, so
+    reject those radar-only points unless the vision/model association is strong.
+    """
     tracks = []
     for name in ("leadsLeft", "leadsRight", "leadsCenter"):
         tracks.extend(optional_field(state, name, ()))
     if not tracks:
         tracks = [optional_field(state, name) for name in
                   ("leadOne", "leadTwo", "leadLeft", "leadRight")]
+
     result, seen_ids = [], set()
     for track in tracks:
         if track is None or not optional_field(track, "status", False):
@@ -69,19 +76,32 @@ def radar_cars(state):
             x = float(track.dRel)
             # Radar Y is positive LEFT; model/UI Y is positive RIGHT.
             y = -float(track.yRel)
-            if not (math.isfinite(x) and math.isfinite(y) and 1 <= x <= 150):
+            v_long = float(optional_field(track, "vLeadK", optional_field(track, "vLead", 0.0)))
+            v_lat = float(optional_field(track, "vLat", 0.0))
+            model_prob = float(optional_field(track, "modelProb", 0.0))
+            if not all(math.isfinite(v) for v in (x, y, v_long, v_lat, model_prob)):
+                continue
+            if not (1 <= x <= 150 and abs(y) <= 8.5):
                 continue
             track_id = int(optional_field(track, "radarTrackId", -1))
         except (AttributeError, TypeError, ValueError, OverflowError):
             continue
+
+        # Strong anti-clutter gate:
+        # 1) keep a genuinely moving radar object, OR
+        # 2) keep a stationary/slow object only when the model strongly agrees.
+        v_abs = math.hypot(v_long, v_lat)
+        if v_abs <= min_abs_speed and model_prob < min_model_prob:
+            continue
+
         if track_id >= 0 and track_id in seen_ids:
             continue
         if track_id < 0 and any(abs(c["x"]-x) < .25 and abs(c["y"]-y) < .15 for c in result):
             continue
         if track_id >= 0:
             seen_ids.add(track_id)
-        # p is display validity, not an invented model confidence.
-        result.append(dict(x=x, y=y, p=1.0, source="radarState"))
+
+        result.append(dict(x=x, y=y, p=1.0, source="radarState", type="car"))
     return result
 
 def merge_cars(vision, radar):
@@ -108,7 +128,7 @@ def main():
         pass
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.4 started; side tracks and traffic state enabled", flush=True)
+    print("CarrotVision bridge v2.5 started; strict vehicle-only filtering enabled", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     target = (os.environ.get("CARROT_VISION_HOST", "255.255.255.255"),
@@ -124,12 +144,13 @@ def main():
         cars = []
         # leadsV3 entries can be the same lead at different prediction horizons.
         # Display only the present-time primary vision lead, not three fake cars.
+        # Use a stricter probability gate than before to reduce false vehicles.
         if len(model.leadsV3):
             lead = model.leadsV3[0]
-            if lead.prob >= 0.5 and len(lead.x) and len(lead.y):
+            if lead.prob >= 0.70 and len(lead.x) and len(lead.y):
                 x, y = float(lead.x[0]), float(lead.y[0])
-                if math.isfinite(x) and math.isfinite(y) and 1 <= x <= 150:
-                    cars.append(dict(x=x, y=y, p=float(lead.prob), source="vision"))
+                if math.isfinite(x) and math.isfinite(y) and 1 <= x <= 150 and abs(y) <= 5.0:
+                    cars.append(dict(x=x, y=y, p=float(lead.prob), source="vision", type="car"))
         # Never display cached radar tracks as current detections.
         if fresh(sm, "radarState", now):
             cars = merge_cars(cars, radar_cars(sm["radarState"]))
