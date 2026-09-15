@@ -12,8 +12,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 final class UdpReceiver extends Thread {
-  private static final long FRAME_INTERVAL_MS = 33L;
-
   private final int port;
   private final Consumer<DriveFrame> callback;
   private final Handler main = new Handler(Looper.getMainLooper());
@@ -62,7 +60,7 @@ final class UdpReceiver extends Thread {
 
   private void scheduleDelivery() {
     if (deliveryScheduled.compareAndSet(false, true)) {
-      main.postDelayed(deliverLatest, FRAME_INTERVAL_MS);
+      main.post(deliverLatest);
     }
   }
 
