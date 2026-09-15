@@ -73,7 +73,7 @@ final class HudView extends View {
     p.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));
   }
   @Override public boolean onTouchEvent(MotionEvent e){
-    // Fit the complete 4:5 HUD inside the actual view without cropping or stretching.
+    // Fit the complete HUD inside the actual view without stretching its contents.
     float scale=Math.min(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);
     float left=(getWidth()-DESIGN_WIDTH*scale)/2f;
     float top=(getHeight()-DESIGN_HEIGHT*scale)/2f;
@@ -107,10 +107,22 @@ final class HudView extends View {
     p.setShader(null);p.setColorFilter(null);p.setStyle(Paint.Style.FILL);p.setColor(color);
     p.setTextSize(size);p.setTextAlign(align);c.drawText(s,x,y,p);
   }
+  private void drawFullScreenBackground(Canvas c){
+    float w=getWidth(),h=getHeight();
+    if(w<=0||h<=0){c.drawColor(0xff0b0c0d);return;}
+    float cx=w*.5f,cy=h*.5f;
+    float radius=(float)Math.hypot(w*.5f,h*.5f)*1.25f;
+    p.setStyle(Paint.Style.FILL);p.setColorFilter(null);
+    p.setShader(new RadialGradient(cx,cy,radius,
+        new int[]{0xff252627,0xff101112,0xff0b0c0d},
+        new float[]{0,.72f,1},Shader.TileMode.CLAMP));
+    c.drawRect(0,0,w,h,p);p.setShader(null);
+  }
   @Override protected void onDraw(Canvas c){
     long drawNow=SystemClock.elapsedRealtime();
-    c.drawColor(Color.BLACK);
-    // Use fit-center scaling so every HUD element remains visible at any view size.
+    // Fill every physical pixel first. The HUD itself is then fit-center scaled
+    // so cars/text keep their original aspect ratio on tall or wide screens.
+    drawFullScreenBackground(c);
     float scale=Math.min(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);if(scale<=0)return;
     int save=c.save();
     c.translate((getWidth()-DESIGN_WIDTH*scale)/2f,(getHeight()-DESIGN_HEIGHT*scale)/2f);
