@@ -186,12 +186,8 @@ final class HudView extends View {
       c.restoreToCount(waitSave);
     }
     if(connected){
-      if(frame.leftBlindspot){
-        int bs=preserveAspect(c,340,930);text(c,"좌측 사각지대",340,930,26,0xffffb547,Paint.Align.CENTER);c.restoreToCount(bs);
-      }
-      if(frame.rightBlindspot){
-        int bs=preserveAspect(c,1196,930);text(c,"우측 사각지대",1196,930,26,0xffffb547,Paint.Align.CENTER);c.restoreToCount(bs);
-      }
+      drawBlindspotWarning(c,true,frame.leftBlindspot,frame.leftBlinker);
+      drawBlindspotWarning(c,false,frame.rightBlindspot,frame.rightBlinker);
       if((SystemClock.elapsedRealtime()/500)%2==0){
         if(frame.leftBlinker){int b=preserveAspect(c,485,1170);text(c,"◀",485,1170,40,0xff20dd61,Paint.Align.CENTER);c.restoreToCount(b);}
         if(frame.rightBlinker){int b=preserveAspect(c,1051,1170);text(c,"▶",1051,1170,40,0xff20dd61,Paint.Align.CENTER);c.restoreToCount(b);}
@@ -200,6 +196,32 @@ final class HudView extends View {
     int hintSave=preserveAspect(c,768,1870);
     text(c,"내 차 길게 누르기 · 색상",768,1870,18,0xff65686b,Paint.Align.CENTER);
     c.restoreToCount(hintSave);
+    c.restoreToCount(save);
+  }
+
+  private void drawBlindspotWarning(Canvas c,boolean left,boolean active,boolean turnSignal){
+    if(!active)return;
+    boolean urgent=turnSignal && (SystemClock.elapsedRealtime()/280)%2==0;
+    float cx=left?405f:1131f,cy=1035f;
+    int save=preserveAspect(c,cx,cy);
+    int color=urgent?0xffff4b3e:0xffffb547;
+
+    p.setShader(new RadialGradient(cx,cy,92,
+      new int[]{urgent?0x66ff4b3e:0x55ffb547,0x00ffb547},
+      new float[]{0f,1f},Shader.TileMode.CLAMP));
+    p.setStyle(Paint.Style.FILL);c.drawCircle(cx,cy,92,p);p.setShader(null);
+
+    Path triangle=new Path();
+    triangle.moveTo(cx,cy-52);triangle.lineTo(cx-48,cy+38);triangle.lineTo(cx+48,cy+38);triangle.close();
+    p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(8);p.setStrokeJoin(Paint.Join.ROUND);p.setColor(color);c.drawPath(triangle,p);
+    p.setStyle(Paint.Style.FILL);p.setStrokeJoin(Paint.Join.MITER);
+    text(c,"!",cx,cy+24,60,color,Paint.Align.CENTER);
+
+    // Small side marker points toward the OEM blind-spot side.
+    Path pointer=new Path();
+    if(left){pointer.moveTo(cx-72,cy);pointer.lineTo(cx-112,cy-24);pointer.lineTo(cx-112,cy+24);}
+    else{pointer.moveTo(cx+72,cy);pointer.lineTo(cx+112,cy-24);pointer.lineTo(cx+112,cy+24);}
+    pointer.close();p.setColor(color);c.drawPath(pointer,p);
     c.restoreToCount(save);
   }
 
