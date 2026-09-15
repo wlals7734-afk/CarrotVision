@@ -14,6 +14,7 @@ final class HudView extends View {
   private static final float VIEWPORT_WIDTH = 576f;
   private static final float VIEWPORT_HEIGHT = 720f;
   private static final float DESIGN_SIZE = 1536f;
+  private static final float VEHICLE_ASPECT_CORRECTION = VIEWPORT_WIDTH / VIEWPORT_HEIGHT;
   private final Paint p = new Paint(3);
   private final Shader backgroundShader = new RadialGradient(768,780,1000,
       new int[]{0xff252627,0xff101112,0xff0b0c0d},
@@ -57,7 +58,7 @@ final class HudView extends View {
     p.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));
   }
   @Override public boolean onTouchEvent(MotionEvent e){
-    float fit=Math.min(getWidth()/VIEWPORT_WIDTH,getHeight()/VIEWPORT_HEIGHT);
+    float fit=Math.max(getWidth()/VIEWPORT_WIDTH,getHeight()/VIEWPORT_HEIGHT);
     float contentWidth=VIEWPORT_WIDTH*fit,contentHeight=VIEWPORT_HEIGHT*fit;
     if(e.getAction()==MotionEvent.ACTION_DOWN&&fit>0){
       touchX=(e.getX()-(getWidth()-contentWidth)/2)*DESIGN_SIZE/contentWidth;
@@ -90,7 +91,7 @@ final class HudView extends View {
   }
   @Override protected void onDraw(Canvas c){
     c.drawColor(Color.BLACK);
-    float fit=Math.min(getWidth()/VIEWPORT_WIDTH,getHeight()/VIEWPORT_HEIGHT);if(fit<=0)return;
+    float fit=Math.max(getWidth()/VIEWPORT_WIDTH,getHeight()/VIEWPORT_HEIGHT);if(fit<=0)return;
     float contentWidth=VIEWPORT_WIDTH*fit,contentHeight=VIEWPORT_HEIGHT*fit;
     int save=c.save();
     c.translate((getWidth()-contentWidth)/2,(getHeight()-contentHeight)/2);
@@ -176,6 +177,8 @@ final class HudView extends View {
     p.setAlpha(255);p.setStrokeCap(Paint.Cap.BUTT);p.setStyle(Paint.Style.FILL);
   }
   private void drawEgo(Canvas c){
+    int aspectSave=c.save();
+    c.scale(1f,VEHICLE_ASPECT_CORRECTION,768f,1168f);
     int save=c.save();
     // Preserve source aspect ratio and place the wheels at the existing ego anchor.
     float scale=440f/1448f;
@@ -205,6 +208,7 @@ final class HudView extends View {
     }
     drawEgoLights(c);
     c.restoreToCount(save);
+    c.restoreToCount(aspectSave);
   }
   // Illustration of received state, not a simulation of physical lamp timing.
   private void drawEgoLights(Canvas c){
