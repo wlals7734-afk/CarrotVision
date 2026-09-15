@@ -4,6 +4,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 final class DriveFrame {
   static final class Car { float x, y, v, p; String source, type; }
@@ -39,7 +40,7 @@ final class DriveFrame {
     JSONArray cars = j.optJSONArray("cars");
     if (cars != null) for (int i=0; i<cars.length(); i++) {
       JSONObject o = cars.optJSONObject(i); if (o == null) continue;
-      String type = o.optString("type", "");
+      String type = o.optString("type", "").trim().toLowerCase(Locale.US);
       if (!("car".equals(type) || "truck".equals(type) || "bus".equals(type))) continue;
       Car c = new Car();
       c.x=(float)o.optDouble("x");
@@ -48,6 +49,8 @@ final class DriveFrame {
       c.p=(float)o.optDouble("p");
       c.source=o.optString("source", "");
       c.type=type;
+      if (!Float.isFinite(c.x) || !Float.isFinite(c.y) || !Float.isFinite(c.p)) continue;
+      if (c.x < 1f || c.x > 150f || Math.abs(c.y) > 8.5f || c.p < 0.5f) continue;
       f.cars.add(c);
     }
     return f;
