@@ -39,7 +39,16 @@ final class DriveFrame {
     JSONArray cars = j.optJSONArray("cars");
     if (cars != null) for (int i=0; i<cars.length(); i++) {
       JSONObject o = cars.optJSONObject(i); if (o == null) continue;
-      Car c = new Car(); c.x=(float)o.optDouble("x"); c.y=(float)o.optDouble("y"); c.v=(float)o.optDouble("v"); c.p=(float)o.optDouble("p"); c.source=o.optString("source"); c.type=o.optString("type","car"); f.cars.add(c);
+      String type = o.optString("type", "");
+      if (!("car".equals(type) || "truck".equals(type) || "bus".equals(type))) continue;
+      Car c = new Car();
+      c.x=(float)o.optDouble("x");
+      c.y=(float)o.optDouble("y");
+      c.v=(float)o.optDouble("v");
+      c.p=(float)o.optDouble("p");
+      c.source=o.optString("source", "");
+      c.type=type;
+      f.cars.add(c);
     }
     return f;
   }
