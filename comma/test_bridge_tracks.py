@@ -9,12 +9,10 @@ tree = ast.parse(pathlib.Path(__file__).with_name("carrot_vision_bridge.py").rea
 functions = ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef)], type_ignores=[])
 namespace = {"math": math}
 exec(compile(functions, "bridge", "exec"), namespace)
-radar_cars = namespace["radar_cars"]
-merge_cars = namespace["merge_cars"]
+comma_ui_cars = namespace["comma_ui_cars"]
 
-def track(x, y, ident=-1, status=True, v=8.0, vlat=0.0, model_prob=0.0):
-    return Obj(dRel=x, yRel=y, radarTrackId=ident, status=status,
-               vLeadK=v, vLat=vlat, modelProb=model_prob)
+def track(x, y, status=True, radar=True, vrel=0.0):
+    return Obj(dRel=x, yRel=y, status=status, radar=radar, vRel=vrel)
 
 class BridgeTracksTest(unittest.TestCase):
     def test_traffic_state(self):
@@ -34,37 +32,41 @@ class BridgeTracksTest(unittest.TestCase):
         sm.plan = Obj()
         self.assertEqual(namespace["traffic_state"](sm,10.1),0)
 
-    def test_side_coordinates_and_duplicates(self):
-        left, right = track(20, 3.5, 7), track(25, -3.5, 8)
-        cars = radar_cars(Obj(leadsLeft=[left], leadsRight=[right], leadsCenter=[left]))
-        self.assertEqual([(c["x"], c["y"]) for c in cars], [(20, -3.5), (25, 3.5)])
-        self.assertTrue(all(c["type"] == "car" for c in cars))
-
-    def test_stationary_clutter_is_filtered(self):
-        clutter = [
-            track(18, 2.5, v=0.0, model_prob=0.0),
-            track(40, -3.0, v=0.2, model_prob=0.1),
-            track(70, 0.5, v=1.0, model_prob=0.3),
-        ]
-        self.assertEqual(radar_cars(Obj(leadsLeft=clutter)), [])
-
-    def test_stationary_vehicle_can_survive_with_model_support(self):
-        stopped_car = track(25, 0.2, v=0.0, model_prob=0.9)
-        cars = radar_cars(Obj(leadsCenter=[stopped_car]))
+    def test_primary_lead_is_forwarded(self):
+        cars = comma_ui_cars(Obj(leadOne=track(28, 1.4), leadTwo=None,
+                                 leadsLeft=[track(10, 4)], leadsRight=[track(12, -4)]))
         self.assertEqual(len(cars), 1)
+        self.assertEqual(cars[0]["source"], "commaLeadOne")
+        self.assertEqual((cars[0]["x"], cars[0]["y"]), (28.0, -1.4))
+        self.assertEqual(cars[0]["type"], "car")
 
-    def test_old_schema_fallback_and_invalid_tracks(self):
-        self.assertEqual(radar_cars(Obj()), [])
-        self.assertEqual(len(radar_cars(Obj(leadOne=track(30, 0)))), 1)
-        bad = [track(float("nan"), 0), track(20, float("inf")),
-               track(30, 0, status=False), track(-10, 2), track(151, 0), track(30, 9.5)]
-        self.assertEqual(radar_cars(Obj(leadsLeft=bad)), [])
+    def test_raw_radar_lists_are_ignored(self):
+        state = Obj(leadOne=track(0, 0, status=False), leadTwo=track(0, 0, status=False),
+                    leadsLeft=[track(20, 3)], leadsRight=[track(25, -3)], leadsCenter=[track(30, 0)])
+        self.assertEqual(comma_ui_cars(state), [])
 
-    def test_vision_merge_keeps_adjacent_vehicle(self):
-        radar = radar_cars(Obj(leadsLeft=[track(30, 3.5)], leadsCenter=[track(30, 0)]))
-        vision = [{"x": 31, "y": .1, "p": .9, "type": "car"},
-                  {"x": 60, "y": 0, "p": .9, "type": "car"}]
-        self.assertEqual(len(merge_cars(vision, radar)), 3)
+    def test_second_lead_matches_carrotpilot_rule(self):
+        state = Obj(leadOne=track(20, 0), leadTwo=track(30, .2, radar=True))
+        cars = comma_ui_cars(state)
+        self.assertEqual([c["source"] for c in cars], ["commaLeadOne", "commaLeadTwo"])
+
+        too_close = Obj(leadOne=track(20, 0), leadTwo=track(22, .2, radar=True))
+        self.assertEqual(len(comma_ui_cars(too_close)), 1)
+
+        vision_only_second = Obj(leadOne=track(20, 0), leadTwo=track(40, .2, radar=False))
+        self.assertEqual(len(comma_ui_cars(vision_only_second)), 1)
+
+    def test_invalid_leads_are_rejected(self):
+        cases = [
+            Obj(leadOne=track(float("nan"), 0), leadTwo=None),
+            Obj(leadOne=track(20, float("inf")), leadTwo=None),
+            Obj(leadOne=track(0.5, 0), leadTwo=None),
+            Obj(leadOne=track(151, 0), leadTwo=None),
+            Obj(leadOne=track(20, 9.0), leadTwo=None),
+            Obj(leadOne=track(20, 0, status=False), leadTwo=None),
+        ]
+        for state in cases:
+            self.assertEqual(comma_ui_cars(state), [])
 
     def test_stale_radar_is_not_fresh(self):
         state = Obj(recv_time={"radarState": 10}, seen={"radarState": True}, valid={"radarState": True})
