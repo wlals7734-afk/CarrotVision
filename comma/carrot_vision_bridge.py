@@ -27,19 +27,16 @@ def fresh(sm, service, now):
     return sm.seen[service] and sm.valid[service] and 0 <= age < 0.7
 
 def optional_bool(obj, field):
-    # pycapnp raises AttributeError for fields absent from the installed schema.
     try:
         return bool(getattr(obj, field))
     except AttributeError:
         return None
 
 def active_state(sm, now):
-    # Prefer actual lateral activity when supplied by this fork.
     if fresh(sm, "controlsState", now):
         lateral = optional_bool(sm["controlsState"], "lateralActive")
         if lateral is not None:
             return lateral
-    # Newer schemas moved overall engagement to selfdriveState.
     for service in ("selfdriveState", "controlsState"):
         if fresh(sm, service, now):
             enabled = optional_bool(sm[service], "enabled")
@@ -53,65 +50,61 @@ def optional_field(obj, name, default=None):
     except AttributeError:
         return default
 
-def radar_cars(state, min_abs_speed=3.0, min_model_prob=0.55):
-    """Return only plausible vehicle tracks from radarState.
+def _lead_to_car(lead, source):
+    if lead is None or not optional_field(lead, "status", False):
+        return None
+    try:
+        x = float(optional_field(lead, "dRel", 0.0))
+        # radarState yRel is positive LEFT; HUD lateral is positive RIGHT.
+        y = -float(optional_field(lead, "yRel", 0.0))
+        v = float(optional_field(lead, "vRel", 0.0))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(v)):
+        return None
+    if not (1.0 <= x <= 150.0 and abs(y) <= 8.5):
+        return None
+    return dict(x=x, y=y, v=v, p=1.0, source=source, type="car")
 
-    CarrotPilot's own radar overlay treats low-speed radar points as clutter-like
-    information rather than normal moving vehicles.  Road furniture such as
-    barriers, signs, trees and cones is commonly stationary in ground speed, so
-    reject those radar-only points unless the vision/model association is strong.
+def comma_ui_cars(radar_state):
+    """Mirror the vehicles CarrotPilot's main road overlay treats as lead cars.
+
+    The CarrotPilot web road overlay draws its primary vehicle box from leadOne.
+    It draws leadTwo only when it is a radar lead and is more than 3 m behind
+    leadOne in range. Raw leadsLeft/leadsRight/leadsCenter are intentionally not
+    forwarded here because those are radar target lists and can contain roadside
+    clutter that should not become vehicle sprites in CarrotVision.
     """
-    tracks = []
-    for name in ("leadsLeft", "leadsRight", "leadsCenter"):
-        tracks.extend(optional_field(state, name, ()))
-    if not tracks:
-        tracks = [optional_field(state, name) for name in
-                  ("leadOne", "leadTwo", "leadLeft", "leadRight")]
+    if radar_state is None:
+        return []
 
-    result, seen_ids = [], set()
-    for track in tracks:
-        if track is None or not optional_field(track, "status", False):
-            continue
+    result = []
+    lead_one = optional_field(radar_state, "leadOne")
+    lead_two = optional_field(radar_state, "leadTwo")
+
+    first = _lead_to_car(lead_one, "commaLeadOne")
+    if first is not None:
+        result.append(first)
+
+    lead_one_dist = float(optional_field(lead_one, "dRel", 0.0) or 0.0) if lead_one is not None else 0.0
+    lead_two_valid = (
+        lead_two is not None
+        and bool(optional_field(lead_two, "status", False))
+        and bool(optional_field(lead_two, "radar", False))
+    )
+    if lead_two_valid:
         try:
-            x = float(track.dRel)
-            # Radar Y is positive LEFT; model/UI Y is positive RIGHT.
-            y = -float(track.yRel)
-            v_long = float(optional_field(track, "vLeadK", optional_field(track, "vLead", 0.0)))
-            v_lat = float(optional_field(track, "vLat", 0.0))
-            model_prob = float(optional_field(track, "modelProb", 0.0))
-            if not all(math.isfinite(v) for v in (x, y, v_long, v_lat, model_prob)):
-                continue
-            if not (1 <= x <= 150 and abs(y) <= 8.5):
-                continue
-            track_id = int(optional_field(track, "radarTrackId", -1))
-        except (AttributeError, TypeError, ValueError, OverflowError):
-            continue
+            lead_two_dist = float(optional_field(lead_two, "dRel", 0.0))
+        except (TypeError, ValueError, OverflowError):
+            lead_two_dist = 0.0
+        if math.isfinite(lead_two_dist) and lead_two_dist > lead_one_dist + 3.0:
+            second = _lead_to_car(lead_two, "commaLeadTwo")
+            if second is not None:
+                result.append(second)
 
-        # Strong anti-clutter gate:
-        # 1) keep a genuinely moving radar object, OR
-        # 2) keep a stationary/slow object only when the model strongly agrees.
-        v_abs = math.hypot(v_long, v_lat)
-        if v_abs <= min_abs_speed and model_prob < min_model_prob:
-            continue
-
-        if track_id >= 0 and track_id in seen_ids:
-            continue
-        if track_id < 0 and any(abs(c["x"]-x) < .25 and abs(c["y"]-y) < .15 for c in result):
-            continue
-        if track_id >= 0:
-            seen_ids.add(track_id)
-
-        result.append(dict(x=x, y=y, p=1.0, source="radarState", type="car"))
     return result
 
-def merge_cars(vision, radar):
-    # Suppress the vision duplicate of the same forward radar vehicle.
-    return radar + [v for v in vision if not any(
-        abs(v["x"]-r["x"]) < max(3.0, .1*r["x"]) and
-        abs(v["y"]-r["y"]) < 1.0 for r in radar)]
-
 def traffic_state(sm, now):
-    # Matches carrotpilot selfdrive/ui/mici/onroad/traffic_light.py.
     if fresh(sm, "longitudinalPlan", now):
         state = optional_field(sm["longitudinalPlan"], "trafficState", 0)
         if state in (1, 2):
@@ -128,7 +121,7 @@ def main():
         pass
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.5 started; strict vehicle-only filtering enabled", flush=True)
+    print("CarrotVision bridge v2.6 started; mirroring CarrotPilot leadOne/leadTwo", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     target = (os.environ.get("CARROT_VISION_HOST", "255.255.255.255"),
@@ -136,24 +129,15 @@ def main():
     while True:
         sm.update(50)
         now = time.monotonic()
-        # Never keep sending cached values with a newly generated timestamp.
         if not (fresh(sm, "carState", now) and fresh(sm, "modelV2", now)):
             time.sleep(0.05)
             continue
         cs, model = sm["carState"], sm["modelV2"]
-        cars = []
-        # leadsV3 entries can be the same lead at different prediction horizons.
-        # Display only the present-time primary vision lead, not three fake cars.
-        # Use a stricter probability gate than before to reduce false vehicles.
-        if len(model.leadsV3):
-            lead = model.leadsV3[0]
-            if lead.prob >= 0.70 and len(lead.x) and len(lead.y):
-                x, y = float(lead.x[0]), float(lead.y[0])
-                if math.isfinite(x) and math.isfinite(y) and 1 <= x <= 150 and abs(y) <= 5.0:
-                    cars.append(dict(x=x, y=y, p=float(lead.prob), source="vision", type="car"))
-        # Never display cached radar tracks as current detections.
-        if fresh(sm, "radarState", now):
-            cars = merge_cars(cars, radar_cars(sm["radarState"]))
+
+        # Vehicle sprites now come only from the same fused lead objects used by
+        # CarrotPilot's main road overlay. No raw side/center radar target lists.
+        cars = comma_ui_cars(sm["radarState"]) if fresh(sm, "radarState", now) else []
+
         lanes = [dict(p=float(prob), pts=points(line))
                  for line, prob in zip(model.laneLines, model.laneLineProbs)]
         packet = dict(version=2, fresh=True, time=int(time.time()*1000),
@@ -166,7 +150,7 @@ def main():
                       rightBlindspot=bool(getattr(cs,"rightBlindspot",False)),
                       cars=cars, path=points(model.position), lanes=lanes)
         try:
-            sock.sendto(json.dumps(packet, allow_nan=False, separators=(",",":")).encode(),target)
+            sock.sendto(json.dumps(packet, allow_nan=False, separators=(",",":")).encode(), target)
             sent += 1
             if sent == 1:
                 print("Sending fresh data to %s:%s" % target, flush=True)
