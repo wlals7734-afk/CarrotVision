@@ -30,6 +30,7 @@ final class HudView extends View {
   private DriveFrame previousFrame;
   private long previousReceived;
   private boolean renderLoopRunning;
+  private float shapeYCorrection=1f;
   private final Runnable renderTick = new Runnable() {
     @Override public void run() {
       if(live()) {
@@ -54,6 +55,7 @@ final class HudView extends View {
   private int indicatorMask;
   private float brakeGlow;
   private float touchX,touchY;
+
   HudView(Context context) {
     super(context);
     reference=BitmapFactory.decodeResource(getResources(),R.drawable.ego_ev6_user);
@@ -72,17 +74,17 @@ final class HudView extends View {
     });
     p.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));
   }
+
   @Override public boolean onTouchEvent(MotionEvent e){
-    // Fit the complete HUD inside the actual view without stretching its contents.
-    float scale=Math.min(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);
-    float left=(getWidth()-DESIGN_WIDTH*scale)/2f;
-    float top=(getHeight()-DESIGN_HEIGHT*scale)/2f;
-    if(e.getAction()==MotionEvent.ACTION_DOWN&&scale>0){
-      touchX=(e.getX()-left)/scale;
-      touchY=(e.getY()-top)/scale;
+    float scaleX=getWidth()/DESIGN_WIDTH;
+    float scaleY=getHeight()/DESIGN_HEIGHT;
+    if(e.getAction()==MotionEvent.ACTION_DOWN&&scaleX>0&&scaleY>0){
+      touchX=e.getX()/scaleX;
+      touchY=e.getY()/scaleY;
     }
     return super.onTouchEvent(e);
   }
+
   void setFrame(DriveFrame f){
     long now=SystemClock.elapsedRealtime();int next=(f.leftBlinker?1:0)|(f.rightBlinker?2:0);
     if(next!=indicatorMask || now-received>=1200)indicatorStart=now;
@@ -96,6 +98,7 @@ final class HudView extends View {
       post(renderTick);
     }
   }
+
   private boolean live(){return frame!=null&&SystemClock.elapsedRealtime()-received<1200;}
   private float sx(float lateral,float distance){return ModelProjection.screenX(lateral,distance);}
   private float sy(float distance){return 250+5580/(distance+6);}
@@ -107,26 +110,24 @@ final class HudView extends View {
     p.setShader(null);p.setColorFilter(null);p.setStyle(Paint.Style.FILL);p.setColor(color);
     p.setTextSize(size);p.setTextAlign(align);c.drawText(s,x,y,p);
   }
-  private void drawFullScreenBackground(Canvas c){
-    float w=getWidth(),h=getHeight();
-    if(w<=0||h<=0){c.drawColor(0xff0b0c0d);return;}
-    float cx=w*.5f,cy=h*.5f;
-    float radius=(float)Math.hypot(w*.5f,h*.5f)*1.25f;
-    p.setStyle(Paint.Style.FILL);p.setColorFilter(null);
-    p.setShader(new RadialGradient(cx,cy,radius,
-        new int[]{0xff252627,0xff101112,0xff0b0c0d},
-        new float[]{0,.72f,1},Shader.TileMode.CLAMP));
-    c.drawRect(0,0,w,h,p);p.setShader(null);
+  private int preserveAspect(Canvas c,float pivotX,float pivotY){
+    int save=c.save();
+    c.translate(pivotX,pivotY);
+    c.scale(1f,shapeYCorrection);
+    c.translate(-pivotX,-pivotY);
+    return save;
   }
+
   @Override protected void onDraw(Canvas c){
     long drawNow=SystemClock.elapsedRealtime();
-    // Fill every physical pixel first. The HUD itself is then fit-center scaled
-    // so cars/text keep their original aspect ratio on tall or wide screens.
-    drawFullScreenBackground(c);
-    float scale=Math.min(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);if(scale<=0)return;
+    float scaleX=getWidth()/DESIGN_WIDTH;
+    float scaleY=getHeight()/DESIGN_HEIGHT;
+    if(scaleX<=0||scaleY<=0)return;
+    shapeYCorrection=scaleX/scaleY;
+
+    c.drawColor(0xff0b0c0d);
     int save=c.save();
-    c.translate((getWidth()-DESIGN_WIDTH*scale)/2f,(getHeight()-DESIGN_HEIGHT*scale)/2f);
-    c.scale(scale,scale);
+    c.scale(scaleX,scaleY);
     c.clipRect(0,0,DESIGN_WIDTH,DESIGN_HEIGHT);
     p.setColor(Color.WHITE);p.setShader(backgroundShader);
     c.drawRect(0,0,DESIGN_WIDTH,DESIGN_HEIGHT,p);p.setShader(null);
@@ -136,7 +137,6 @@ final class HudView extends View {
     if(connected)drawPath(c);
     for(LaneTrack lane:laneTracks)drawLane(c,lane,drawNow);
     if(connected){
-
       sortedCars.clear();
       sortedCars.addAll(frame.cars);
       Collections.sort(sortedCars,FAR_TO_NEAR);
@@ -149,28 +149,60 @@ final class HudView extends View {
         float distance=old==null?car.x:lerp(old.x,car.x,blend);
         float lateral=old==null?car.y:lerp(old.y,car.y,blend);
         float w=Math.min(310,5000/(distance+11.5f)),x=sx(lateral,distance),y=sy(distance);
+        int vehicleSave=preserveAspect(c,x,y);
         detectedVehicles.draw(c,x,y,w);
+        c.restoreToCount(vehicleSave);
       }
     }
+    int egoSave=preserveAspect(c,768,1190);
     drawEgo(c);
+    c.restoreToCount(egoSave);
     c.restoreToCount(worldSave);
-    if(connected && (frame.trafficState==1 || frame.trafficState==2)) drawTrafficLight(c,frame.trafficState);
+
+    if(connected && (frame.trafficState==1 || frame.trafficState==2)){
+      int signalSave=preserveAspect(c,1315,149);
+      drawTrafficLight(c,frame.trafficState);
+      c.restoreToCount(signalSave);
+    }
+
+    int speedSave=preserveAspect(c,80,1740);
     text(c,connected?String.valueOf(Math.round(frame.speed)):"—",80,1740,148,Color.WHITE,Paint.Align.LEFT);
+    c.restoreToCount(speedSave);
+    int unitSave=preserveAspect(c,90,1800);
     text(c,"km/h",90,1800,49,0xff999b9d,Paint.Align.LEFT);
+    c.restoreToCount(unitSave);
+
+    int wheelAspectSave=preserveAspect(c,1388,1695);
     int wheelSave=c.save();c.translate(0,340);drawWheel(c,connected&&frame.enabled);c.restoreToCount(wheelSave);
+    c.restoreToCount(wheelAspectSave);
+
+    int liveSave=preserveAspect(c,1450,48);
     text(c,connected?"LIVE":"연결 대기",1450,48,18,connected?0xff65cd8e:0xffa0a0a0,Paint.Align.RIGHT);
-    if(!connected)text(c,"실시간 데이터 대기",768,360,28,0xffb0b2b5,Paint.Align.CENTER);
+    c.restoreToCount(liveSave);
+
+    if(!connected){
+      int waitSave=preserveAspect(c,768,360);
+      text(c,"실시간 데이터 대기",768,360,28,0xffb0b2b5,Paint.Align.CENTER);
+      c.restoreToCount(waitSave);
+    }
     if(connected){
-      if(frame.leftBlindspot)text(c,"좌측 사각지대",340,930,26,0xffffb547,Paint.Align.CENTER);
-      if(frame.rightBlindspot)text(c,"우측 사각지대",1196,930,26,0xffffb547,Paint.Align.CENTER);
+      if(frame.leftBlindspot){
+        int bs=preserveAspect(c,340,930);text(c,"좌측 사각지대",340,930,26,0xffffb547,Paint.Align.CENTER);c.restoreToCount(bs);
+      }
+      if(frame.rightBlindspot){
+        int bs=preserveAspect(c,1196,930);text(c,"우측 사각지대",1196,930,26,0xffffb547,Paint.Align.CENTER);c.restoreToCount(bs);
+      }
       if((SystemClock.elapsedRealtime()/500)%2==0){
-        if(frame.leftBlinker)text(c,"◀",485,1170,40,0xff20dd61,Paint.Align.CENTER);
-        if(frame.rightBlinker)text(c,"▶",1051,1170,40,0xff20dd61,Paint.Align.CENTER);
+        if(frame.leftBlinker){int b=preserveAspect(c,485,1170);text(c,"◀",485,1170,40,0xff20dd61,Paint.Align.CENTER);c.restoreToCount(b);}
+        if(frame.rightBlinker){int b=preserveAspect(c,1051,1170);text(c,"▶",1051,1170,40,0xff20dd61,Paint.Align.CENTER);c.restoreToCount(b);}
       }
     }
+    int hintSave=preserveAspect(c,768,1870);
     text(c,"내 차 길게 누르기 · 색상",768,1870,18,0xff65686b,Paint.Align.CENTER);
+    c.restoreToCount(hintSave);
     c.restoreToCount(save);
   }
+
   private float interpolationBlend(long now){
     if(previousFrame==null || previousReceived<=0 || received<=previousReceived)return 1f;
     long interval=Math.max(MIN_INTERPOLATION_MS,Math.min(MAX_INTERPOLATION_MS,received-previousReceived));
@@ -193,9 +225,9 @@ final class HudView extends View {
   @Override protected void onDetachedFromWindow(){
     removeCallbacks(renderTick);renderLoopRunning=false;super.onDetachedFromWindow();
   }
+
   private void drawTrafficLight(Canvas c,int state){
     if(state!=1 && state!=2)return;
-    // Compact horizontal housing, matching the signal preview layout.
     p.setStyle(Paint.Style.FILL);p.setShader(null);p.setColor(0xff303438);
     c.drawRoundRect(1160,90,1470,208,42,42,p);
     p.setColor(0xff121416);c.drawRoundRect(1164,94,1466,204,39,39,p);
@@ -208,13 +240,13 @@ final class HudView extends View {
         on?new int[]{Color.WHITE,colors[i],0xff171a1c}:new int[]{0xff303438,0xff202326,0xff111315},
         new float[]{0,.35f,1},Shader.TileMode.CLAMP));
       c.drawCircle(x,y,35,p);p.setShader(null);
-      // LED texture stays legible at the app's small on-screen size.
       p.setColor(on?0xaaffffff:0xff34383b);
       for(int row=-3;row<=3;row++)for(int col=-3;col<=3;col++)
         if(row*row+col*col<=10)c.drawCircle(x+col*8,y+row*8,1.7f,p);
     }
     text(c,"당근 판단 · "+(state==1?"정지":state==2?"진행":"대기"),1315,241,24,0xffbdc2c6,Paint.Align.CENTER);
   }
+
   private void drawPath(Canvas c){
     if(frame.path.size()<3)return;
     Path a=drivingPath;a.rewind();boolean first=true;
@@ -223,21 +255,21 @@ final class HudView extends View {
     for(int i=frame.path.size()-1;i>=0;i--){float[] q=frame.path.get(i);if(valid(q))a.lineTo(sx(q[1]-.95f,q[0]),sy(q[0]));}
     a.close();p.setShader(pathShader);c.drawPath(a,p);p.setShader(null);
   }
+
   private void drawLane(Canvas c,LaneTrack lane,long now){
     float opacity=lane.alpha(now);if(opacity<=0 || lane.points.size()<2)return;
     p.setShader(null);p.setColorFilter(null);p.setColor(0xffe5e7e8);
     p.setAlpha(Math.round(220*opacity));p.setStyle(Paint.Style.STROKE);
     p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
     float[] last=null;
-    // Connect the measured points at their actual lateral positions, including bends.
     for(float[] q:lane.points){
       if(last!=null){p.setStrokeWidth(Math.max(1,50/(q[0]+6)));c.drawLine(sx(last[1],last[0]),sy(last[0]),sx(q[1],q[0]),sy(q[0]),p);}last=q;
     }
     p.setAlpha(255);p.setStrokeCap(Paint.Cap.BUTT);p.setStyle(Paint.Style.FILL);
   }
+
   private void drawEgo(Canvas c){
     int save=c.save();
-    // Preserve source aspect ratio and place the wheels at the existing ego anchor.
     float scale=440f/1448f;
     c.translate(548,1168-1370*scale);c.scale(scale,scale);c.translate(-44,-84);
     Path silhouette=polygon(64,295,82,278,135,260,190,251,211,259,225,276,219,308,
@@ -266,7 +298,7 @@ final class HudView extends View {
     drawEgoLights(c);
     c.restoreToCount(save);
   }
-  // Illustration of received state, not a simulation of physical lamp timing.
+
   private void drawEgoLights(Canvas c){
     boolean fresh=live();
     float target=fresh && frame.brakeLights?1f:0f;
@@ -283,6 +315,7 @@ final class HudView extends View {
       if(frame.rightBlinker){Path right=new Path();right.moveTo(1257,819);right.cubicTo(1316,817,1389,831,1455,866);lamp(c,right,0xffffa800,1f,24);}
     }
   }
+
   private void lamp(Canvas c,Path shape,int color,float intensity,float width){
     p.setColorFilter(null);p.setShader(null);p.setStyle(Paint.Style.STROKE);p.setStrokeCap(Paint.Cap.ROUND);
     p.setColor(color);p.setAlpha(Math.round(38*intensity));p.setStrokeWidth(width*3);c.drawPath(shape,p);
@@ -290,6 +323,7 @@ final class HudView extends View {
     p.setColor(Color.WHITE);p.setAlpha(Math.round(145*intensity));p.setStrokeWidth(width*.22f);c.drawPath(shape,p);
     p.setAlpha(255);p.setStrokeCap(Paint.Cap.BUTT);p.setStyle(Paint.Style.FILL);
   }
+
   private void drawWheel(Canvas c,boolean enabled){
     p.setColor(enabled?0xff13df4e:0xff73777b);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(10);
     c.drawCircle(1388,1355,62,p);p.setStyle(Paint.Style.FILL);
