@@ -11,10 +11,6 @@ import android.widget.Toast;
 import java.util.*;
 
 final class HudView extends View {
-  private static final float VIEWPORT_WIDTH = 576f;
-  private static final float VIEWPORT_HEIGHT = 720f;
-  private static final float DESIGN_SIZE = 1536f;
-  private static final float VEHICLE_ASPECT_CORRECTION = VIEWPORT_WIDTH / VIEWPORT_HEIGHT;
   private final Paint p = new Paint(3);
   private final Shader backgroundShader = new RadialGradient(768,780,1000,
       new int[]{0xff252627,0xff101112,0xff0b0c0d},
@@ -25,7 +21,23 @@ final class HudView extends View {
   private final ArrayList<DriveFrame.Car> sortedCars = new ArrayList<>();
   private static final Comparator<DriveFrame.Car> FAR_TO_NEAR =
       (a,b)->Float.compare(b.x,a.x);
-  private final Runnable staleRefresh = this::invalidate;
+  private static final long RENDER_INTERVAL_MS = 33L;
+  private static final long MIN_INTERPOLATION_MS = 33L;
+  private static final long MAX_INTERPOLATION_MS = 80L;
+  private DriveFrame previousFrame;
+  private long previousReceived;
+  private boolean renderLoopRunning;
+  private final Runnable renderTick = new Runnable() {
+    @Override public void run() {
+      if(live()) {
+        invalidate();
+        postDelayed(this,RENDER_INTERVAL_MS);
+      } else {
+        invalidate();
+        renderLoopRunning=false;
+      }
+    }
+  };
   private final Bitmap reference;
   private final DetectedVehicleRenderer detectedVehicles;
   private final SharedPreferences preferences;
@@ -58,25 +70,25 @@ final class HudView extends View {
     p.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));
   }
   @Override public boolean onTouchEvent(MotionEvent e){
-    float fit=Math.max(getWidth()/VIEWPORT_WIDTH,getHeight()/VIEWPORT_HEIGHT);
-    float contentWidth=VIEWPORT_WIDTH*fit,contentHeight=VIEWPORT_HEIGHT*fit;
-    if(e.getAction()==MotionEvent.ACTION_DOWN&&fit>0){
-      touchX=(e.getX()-(getWidth()-contentWidth)/2)*DESIGN_SIZE/contentWidth;
-      touchY=(e.getY()-(getHeight()-contentHeight)/2)*DESIGN_SIZE/contentHeight;
+    float size=Math.min(getWidth(),getHeight());
+    if(e.getAction()==MotionEvent.ACTION_DOWN&&size>0){
+      touchX=(e.getX()-(getWidth()-size)/2)*1536/size;
+      touchY=(e.getY()-(getHeight()-size)/2)*1536/size;
     }
     return super.onTouchEvent(e);
   }
   void setFrame(DriveFrame f){
     long now=SystemClock.elapsedRealtime();int next=(f.leftBlinker?1:0)|(f.rightBlinker?2:0);
     if(next!=indicatorMask || now-received>=1200)indicatorStart=now;
-    indicatorMask=next;frame=f;received=now;
+    indicatorMask=next;previousFrame=frame;previousReceived=received;frame=f;received=now;
     for(int i=0;i<laneTracks.length;i++){
       DriveFrame.Line line=i<f.lanes.size()?f.lanes.get(i):null;
       laneTracks[i].update(line==null?0f:line.probability,line==null?null:line.points,now);
     }
-    removeCallbacks(staleRefresh);
-    invalidate();
-    postDelayed(staleRefresh,1250);
+    if(!renderLoopRunning){
+      renderLoopRunning=true;
+      post(renderTick);
+    }
   }
   private boolean live(){return frame!=null&&SystemClock.elapsedRealtime()-received<1200;}
   private float sx(float lateral,float distance){return ModelProjection.screenX(lateral,distance);}
@@ -90,29 +102,30 @@ final class HudView extends View {
     p.setTextSize(size);p.setTextAlign(align);c.drawText(s,x,y,p);
   }
   @Override protected void onDraw(Canvas c){
-    c.drawColor(Color.BLACK);
-    float fit=Math.max(getWidth()/VIEWPORT_WIDTH,getHeight()/VIEWPORT_HEIGHT);if(fit<=0)return;
-    float contentWidth=VIEWPORT_WIDTH*fit,contentHeight=VIEWPORT_HEIGHT*fit;
-    int save=c.save();
-    c.translate((getWidth()-contentWidth)/2,(getHeight()-contentHeight)/2);
-    c.scale(contentWidth/DESIGN_SIZE,contentHeight/DESIGN_SIZE);
-    c.clipRect(0,0,DESIGN_SIZE,DESIGN_SIZE);
+    long drawNow=SystemClock.elapsedRealtime();
+    c.drawColor(Color.BLACK);float size=Math.min(getWidth(),getHeight());if(size<=0)return;
+    int save=c.save();c.translate((getWidth()-size)/2,(getHeight()-size)/2);c.scale(size/1536,size/1536);
+    c.clipRect(0,0,1536,1536);
     p.setColor(Color.WHITE);p.setShader(backgroundShader);
     c.drawRect(0,0,1536,1536,p);p.setShader(null);
 
     boolean connected=live();
     if(connected)drawPath(c);
-    for(LaneTrack lane:laneTracks)drawLane(c,lane,SystemClock.elapsedRealtime());
+    for(LaneTrack lane:laneTracks)drawLane(c,lane,drawNow);
     if(connected){
 
       sortedCars.clear();
       sortedCars.addAll(frame.cars);
       Collections.sort(sortedCars,FAR_TO_NEAR);
       int first=Math.max(0,sortedCars.size()-8);
+      float blend=interpolationBlend(drawNow);
       for(int i=first;i<sortedCars.size();i++){
         DriveFrame.Car car=sortedCars.get(i);
         if(!Float.isFinite(car.x)||!Float.isFinite(car.y)||car.x<1||car.x>150||car.p<.5f)continue;
-        float w=Math.min(310,5000/(car.x+11.5f)),x=sx(car.y,car.x),y=sy(car.x);
+        DriveFrame.Car old=previousCar(car);
+        float distance=old==null?car.x:lerp(old.x,car.x,blend);
+        float lateral=old==null?car.y:lerp(old.y,car.y,blend);
+        float w=Math.min(310,5000/(distance+11.5f)),x=sx(lateral,distance),y=sy(distance);
         detectedVehicles.draw(c,x,y,w);
       }
     }
@@ -133,6 +146,28 @@ final class HudView extends View {
     }
     text(c,"내 차 길게 누르기 · 색상",768,1498,18,0xff65686b,Paint.Align.CENTER);
     c.restoreToCount(save);
+  }
+  private float interpolationBlend(long now){
+    if(previousFrame==null || previousReceived<=0 || received<=previousReceived)return 1f;
+    long interval=Math.max(MIN_INTERPOLATION_MS,Math.min(MAX_INTERPOLATION_MS,received-previousReceived));
+    return Math.max(0f,Math.min(1f,(now-received)/(float)interval));
+  }
+  private DriveFrame.Car previousCar(DriveFrame.Car current){
+    if(previousFrame==null)return null;
+    DriveFrame.Car best=null;float bestScore=Float.MAX_VALUE;
+    for(DriveFrame.Car candidate:previousFrame.cars){
+      if(candidate==null || !Float.isFinite(candidate.x) || !Float.isFinite(candidate.y))continue;
+      if(current.source!=null && candidate.source!=null && !current.source.equals(candidate.source))continue;
+      float dx=Math.abs(candidate.x-current.x),dy=Math.abs(candidate.y-current.y);
+      if(dx>20f || dy>4f)continue;
+      float score=dx+dy*4f;
+      if(score<bestScore){bestScore=score;best=candidate;}
+    }
+    return best;
+  }
+  private static float lerp(float from,float to,float amount){return from+(to-from)*amount;}
+  @Override protected void onDetachedFromWindow(){
+    removeCallbacks(renderTick);renderLoopRunning=false;super.onDetachedFromWindow();
   }
   private void drawTrafficLight(Canvas c,int state){
     if(state!=1 && state!=2)return;
@@ -177,8 +212,6 @@ final class HudView extends View {
     p.setAlpha(255);p.setStrokeCap(Paint.Cap.BUTT);p.setStyle(Paint.Style.FILL);
   }
   private void drawEgo(Canvas c){
-    int aspectSave=c.save();
-    c.scale(1f,VEHICLE_ASPECT_CORRECTION,768f,1168f);
     int save=c.save();
     // Preserve source aspect ratio and place the wheels at the existing ego anchor.
     float scale=440f/1448f;
@@ -208,7 +241,6 @@ final class HudView extends View {
     }
     drawEgoLights(c);
     c.restoreToCount(save);
-    c.restoreToCount(aspectSave);
   }
   // Illustration of received state, not a simulation of physical lamp timing.
   private void drawEgoLights(Canvas c){
