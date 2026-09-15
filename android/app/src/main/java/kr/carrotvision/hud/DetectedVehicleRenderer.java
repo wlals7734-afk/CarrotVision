@@ -8,6 +8,7 @@ import android.graphics.*;
  * Bitmaps are decoded once and then scaled by the GPU for low-end hardware.
  */
 final class DetectedVehicleRenderer {
+  private static final float VERTICAL_CORRECTION = 576f / 720f;
   private final Paint paint =
       new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
   private final RectF destination = new RectF();
@@ -27,7 +28,7 @@ final class DetectedVehicleRenderer {
     if (!Float.isFinite(x) || !Float.isFinite(bottom) || !Float.isFinite(width) || width <= 0) return;
 
     Bitmap bitmap = x < 620f ? left : x > 916f ? right : front;
-    float height = width * bitmap.getHeight() / bitmap.getWidth();
+    float height = width * bitmap.getHeight() / bitmap.getWidth() * VERTICAL_CORRECTION;
     destination.set(x - width * .5f, bottom - height, x + width * .5f, bottom);
     canvas.drawBitmap(bitmap, null, destination, paint);
   }
