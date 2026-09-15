@@ -11,8 +11,11 @@ import android.widget.Toast;
 import java.util.*;
 
 final class HudView extends View {
+  private static final float DESIGN_WIDTH = 1536f;
+  private static final float DESIGN_HEIGHT = 1920f;
+  private static final float WORLD_Y_OFFSET = 180f;
   private final Paint p = new Paint(3);
-  private final Shader backgroundShader = new RadialGradient(768,780,1000,
+  private final Shader backgroundShader = new RadialGradient(768,960,1200,
       new int[]{0xff252627,0xff101112,0xff0b0c0d},
       new float[]{0,.72f,1},Shader.TileMode.CLAMP);
   private final Shader pathShader = new LinearGradient(0,390,0,1000,
@@ -59,7 +62,7 @@ final class HudView extends View {
     colorIndex=Math.max(0,Math.min(paints.length-1,preferences.getInt("ev6CarColor",1)));
     setContentDescription("CarrotVision. 내 차량을 길게 눌러 색상 변경");
     setOnLongClickListener(v->{
-      if(touchX<520||touchX>1010||touchY<750||touchY>1190)return false;
+      if(touchX<520||touchX>1010||touchY<930||touchY>1370)return false;
       if(live()&&frame.speed>1){Toast.makeText(context,"정차 후 색상을 변경해 주세요",Toast.LENGTH_SHORT).show();return true;}
       new AlertDialog.Builder(context).setTitle("내 차량 색상")
         .setSingleChoiceItems(colors,colorIndex,(dialog,which)->{
@@ -70,10 +73,12 @@ final class HudView extends View {
     p.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));
   }
   @Override public boolean onTouchEvent(MotionEvent e){
-    float size=Math.min(getWidth(),getHeight());
-    if(e.getAction()==MotionEvent.ACTION_DOWN&&size>0){
-      touchX=(e.getX()-(getWidth()-size)/2)*1536/size;
-      touchY=(e.getY()-(getHeight()-size)/2)*1536/size;
+    float scale=Math.max(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);
+    float left=(getWidth()-DESIGN_WIDTH*scale)/2f;
+    float top=(getHeight()-DESIGN_HEIGHT*scale)/2f;
+    if(e.getAction()==MotionEvent.ACTION_DOWN&&scale>0){
+      touchX=(e.getX()-left)/scale;
+      touchY=(e.getY()-top)/scale;
     }
     return super.onTouchEvent(e);
   }
@@ -103,13 +108,17 @@ final class HudView extends View {
   }
   @Override protected void onDraw(Canvas c){
     long drawNow=SystemClock.elapsedRealtime();
-    c.drawColor(Color.BLACK);float size=Math.min(getWidth(),getHeight());if(size<=0)return;
-    int save=c.save();c.translate((getWidth()-size)/2,(getHeight()-size)/2);c.scale(size/1536,size/1536);
-    c.clipRect(0,0,1536,1536);
+    c.drawColor(Color.BLACK);
+    float scale=Math.max(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);if(scale<=0)return;
+    int save=c.save();
+    c.translate((getWidth()-DESIGN_WIDTH*scale)/2f,(getHeight()-DESIGN_HEIGHT*scale)/2f);
+    c.scale(scale,scale);
+    c.clipRect(0,0,DESIGN_WIDTH,DESIGN_HEIGHT);
     p.setColor(Color.WHITE);p.setShader(backgroundShader);
-    c.drawRect(0,0,1536,1536,p);p.setShader(null);
+    c.drawRect(0,0,DESIGN_WIDTH,DESIGN_HEIGHT,p);p.setShader(null);
 
     boolean connected=live();
+    int worldSave=c.save();c.translate(0,WORLD_Y_OFFSET);
     if(connected)drawPath(c);
     for(LaneTrack lane:laneTracks)drawLane(c,lane,drawNow);
     if(connected){
@@ -130,21 +139,22 @@ final class HudView extends View {
       }
     }
     drawEgo(c);
+    c.restoreToCount(worldSave);
     if(connected && (frame.trafficState==1 || frame.trafficState==2)) drawTrafficLight(c,frame.trafficState);
-    text(c,connected?String.valueOf(Math.round(frame.speed)):"—",80,1390,148,Color.WHITE,Paint.Align.LEFT);
-    text(c,"km/h",90,1450,49,0xff999b9d,Paint.Align.LEFT);
-    drawWheel(c,connected&&frame.enabled);
+    text(c,connected?String.valueOf(Math.round(frame.speed)):"—",80,1740,148,Color.WHITE,Paint.Align.LEFT);
+    text(c,"km/h",90,1800,49,0xff999b9d,Paint.Align.LEFT);
+    int wheelSave=c.save();c.translate(0,340);drawWheel(c,connected&&frame.enabled);c.restoreToCount(wheelSave);
     text(c,connected?"LIVE":"연결 대기",1450,48,18,connected?0xff65cd8e:0xffa0a0a0,Paint.Align.RIGHT);
     if(!connected)text(c,"실시간 데이터 대기",768,360,28,0xffb0b2b5,Paint.Align.CENTER);
     if(connected){
-      if(frame.leftBlindspot)text(c,"좌측 사각지대",340,750,26,0xffffb547,Paint.Align.CENTER);
-      if(frame.rightBlindspot)text(c,"우측 사각지대",1196,750,26,0xffffb547,Paint.Align.CENTER);
+      if(frame.leftBlindspot)text(c,"좌측 사각지대",340,930,26,0xffffb547,Paint.Align.CENTER);
+      if(frame.rightBlindspot)text(c,"우측 사각지대",1196,930,26,0xffffb547,Paint.Align.CENTER);
       if((SystemClock.elapsedRealtime()/500)%2==0){
-        if(frame.leftBlinker)text(c,"◀",485,990,40,0xff20dd61,Paint.Align.CENTER);
-        if(frame.rightBlinker)text(c,"▶",1051,990,40,0xff20dd61,Paint.Align.CENTER);
+        if(frame.leftBlinker)text(c,"◀",485,1170,40,0xff20dd61,Paint.Align.CENTER);
+        if(frame.rightBlinker)text(c,"▶",1051,1170,40,0xff20dd61,Paint.Align.CENTER);
       }
     }
-    text(c,"내 차 길게 누르기 · 색상",768,1498,18,0xff65686b,Paint.Align.CENTER);
+    text(c,"내 차 길게 누르기 · 색상",768,1870,18,0xff65686b,Paint.Align.CENTER);
     c.restoreToCount(save);
   }
   private float interpolationBlend(long now){
