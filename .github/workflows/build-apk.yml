@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'android/**'
+      - 'comma/**'
       - '.github/workflows/build-apk.yml'
 permissions:
   contents: read
