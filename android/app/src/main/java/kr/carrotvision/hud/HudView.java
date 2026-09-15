@@ -73,7 +73,8 @@ final class HudView extends View {
     p.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));
   }
   @Override public boolean onTouchEvent(MotionEvent e){
-    float scale=Math.max(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);
+    // Fit the complete 4:5 HUD inside the actual view without cropping or stretching.
+    float scale=Math.min(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);
     float left=(getWidth()-DESIGN_WIDTH*scale)/2f;
     float top=(getHeight()-DESIGN_HEIGHT*scale)/2f;
     if(e.getAction()==MotionEvent.ACTION_DOWN&&scale>0){
@@ -109,7 +110,8 @@ final class HudView extends View {
   @Override protected void onDraw(Canvas c){
     long drawNow=SystemClock.elapsedRealtime();
     c.drawColor(Color.BLACK);
-    float scale=Math.max(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);if(scale<=0)return;
+    // Use fit-center scaling so every HUD element remains visible at any view size.
+    float scale=Math.min(getWidth()/DESIGN_WIDTH,getHeight()/DESIGN_HEIGHT);if(scale<=0)return;
     int save=c.save();
     c.translate((getWidth()-DESIGN_WIDTH*scale)/2f,(getHeight()-DESIGN_HEIGHT*scale)/2f);
     c.scale(scale,scale);
