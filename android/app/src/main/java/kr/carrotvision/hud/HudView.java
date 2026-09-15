@@ -11,6 +11,9 @@ import android.widget.Toast;
 import java.util.*;
 
 final class HudView extends View {
+  private static final float VIEWPORT_WIDTH = 576f;
+  private static final float VIEWPORT_HEIGHT = 720f;
+  private static final float DESIGN_SIZE = 1536f;
   private final Paint p = new Paint(3);
   private final Shader backgroundShader = new RadialGradient(768,780,1000,
       new int[]{0xff252627,0xff101112,0xff0b0c0d},
@@ -54,10 +57,11 @@ final class HudView extends View {
     p.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));
   }
   @Override public boolean onTouchEvent(MotionEvent e){
-    float size=Math.min(getWidth(),getHeight());
-    if(e.getAction()==MotionEvent.ACTION_DOWN&&size>0){
-      touchX=(e.getX()-(getWidth()-size)/2)*1536/size;
-      touchY=(e.getY()-(getHeight()-size)/2)*1536/size;
+    float fit=Math.min(getWidth()/VIEWPORT_WIDTH,getHeight()/VIEWPORT_HEIGHT);
+    float contentWidth=VIEWPORT_WIDTH*fit,contentHeight=VIEWPORT_HEIGHT*fit;
+    if(e.getAction()==MotionEvent.ACTION_DOWN&&fit>0){
+      touchX=(e.getX()-(getWidth()-contentWidth)/2)*DESIGN_SIZE/contentWidth;
+      touchY=(e.getY()-(getHeight()-contentHeight)/2)*DESIGN_SIZE/contentHeight;
     }
     return super.onTouchEvent(e);
   }
@@ -85,9 +89,13 @@ final class HudView extends View {
     p.setTextSize(size);p.setTextAlign(align);c.drawText(s,x,y,p);
   }
   @Override protected void onDraw(Canvas c){
-    c.drawColor(Color.BLACK);float size=Math.min(getWidth(),getHeight());if(size<=0)return;
-    int save=c.save();c.translate((getWidth()-size)/2,(getHeight()-size)/2);c.scale(size/1536,size/1536);
-    c.clipRect(0,0,1536,1536);
+    c.drawColor(Color.BLACK);
+    float fit=Math.min(getWidth()/VIEWPORT_WIDTH,getHeight()/VIEWPORT_HEIGHT);if(fit<=0)return;
+    float contentWidth=VIEWPORT_WIDTH*fit,contentHeight=VIEWPORT_HEIGHT*fit;
+    int save=c.save();
+    c.translate((getWidth()-contentWidth)/2,(getHeight()-contentHeight)/2);
+    c.scale(contentWidth/DESIGN_SIZE,contentHeight/DESIGN_SIZE);
+    c.clipRect(0,0,DESIGN_SIZE,DESIGN_SIZE);
     p.setColor(Color.WHITE);p.setShader(backgroundShader);
     c.drawRect(0,0,1536,1536,p);p.setShader(null);
 
