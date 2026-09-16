@@ -31,6 +31,12 @@ jobs:
         run: |
           javac -d /tmp/carrot-lane-check android/app/src/main/java/kr/carrotvision/hud/ModelProjection.java android/validation/ModelProjectionCheck.java
           java -cp /tmp/carrot-lane-check kr.carrotvision.hud.ModelProjectionCheck
+      - name: Hide raw model and radar diagnostics in release UI
+        run: |
+          sed -i '/^[[:space:]]*drawRadarPoints(c);[[:space:]]*$/d' android/app/src/main/java/kr/carrotvision/hud/HudView.java
+          sed -i '/^[[:space:]]*drawModelLeads(c);[[:space:]]*$/d' android/app/src/main/java/kr/carrotvision/hud/HudView.java
+          ! grep -q '^[[:space:]]*drawRadarPoints(c);' android/app/src/main/java/kr/carrotvision/hud/HudView.java
+          ! grep -q '^[[:space:]]*drawModelLeads(c);' android/app/src/main/java/kr/carrotvision/hud/HudView.java
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
