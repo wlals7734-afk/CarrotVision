@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050607;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans KR",Roboto,sans-serif}
+  #stage{position:relative;width:100%;height:100%;overflow:hidden;background:#050607}
+  #road{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 54%;background:#050607;filter:saturate(.92) contrast(1.04) brightness(.88)}
+  #shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(2,4,6,.34) 0%,rgba(2,4,6,.04) 30%,rgba(2,4,6,.02) 62%,rgba(2,4,6,.50) 100%);pointer-events:none}
+  #vision{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .top{position:absolute;left:3.8vw;right:3.8vw;top:3.2vh;display:flex;justify-content:space-between;align-items:flex-start;z-index:6;pointer-events:none}
+  .telemetry{font-size:clamp(11px,2.35vw,18px);letter-spacing:.04em;color:rgba(235,241,244,.76);text-shadow:0 1px 3px #000}
+  .live{display:inline-flex;align-items:center;gap:.45em;margin-top:.55em;color:#2cf49a;font-weight:700;font-size:.92em}.live:before{content:"";width:.62em;height:.62em;border-radius:50%;background:#2cf49a;box-shadow:0 0 12px rgba(44,244,154,.55)}
+  #traffic{display:none;min-width:138px;padding:10px 13px 9px;border-radius:21px;background:rgba(7,10,13,.72);border:1px solid rgba(194,211,224,.24);backdrop-filter:blur(8px);text-align:center;box-shadow:0 6px 22px rgba(0,0,0,.28)}
+  .lights{display:flex;gap:8px;justify-content:center}.lamp{width:27px;height:27px;border-radius:50%;background:#13171a;border:2px solid #090b0c;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+  .lamp.red.on{background:#ff3246;box-shadow:0 0 18px #ff263f,inset 0 0 10px #fff}.lamp.green.on{background:#2dff8f;box-shadow:0 0 18px #24e77f,inset 0 0 10px #fff}
+  #trafficLabel{font-size:12px;margin-top:7px;color:#dce3e6}
+  #ego{position:absolute;z-index:5;left:50%;bottom:15.5vh;transform:translateX(-50%);width:min(44vw,520px);max-height:28vh;object-fit:contain;filter:drop-shadow(0 12px 18px rgba(0,0,0,.72));pointer-events:none}
+  #egoFallback{position:absolute;z-index:4;left:50%;bottom:19vh;transform:translateX(-50%);width:31vw;max-width:320px;height:9vh;border-radius:45% 45% 28% 28%;background:linear-gradient(#e9edf0,#8f969c 54%,#2d3338 55%,#dfe4e8 72%,#666d73);box-shadow:0 10px 26px rgba(0,0,0,.62);display:none}
+  .speedPanel{position:absolute;left:4.8vw;bottom:6.6vh;z-index:7;text-shadow:0 2px 6px #000;pointer-events:none}
+  #speed{font-size:clamp(58px,14.5vw,132px);font-weight:500;line-height:.82;letter-spacing:-.055em}.unit{font-size:clamp(13px,3.3vw,24px);color:rgba(231,237,240,.72);margin-top:.55em}
+  #mode{margin-top:.8em;display:inline-block;border:1px solid rgba(208,221,231,.28);background:rgba(8,12,15,.55);border-radius:999px;padding:.25em .75em;font-size:clamp(12px,2.8vw,20px);color:#e1e6e9}
+  .assistPanel{position:absolute;right:4.8vw;bottom:8.2vh;z-index:7;min-width:92px;border-radius:17px;background:rgba(7,10,13,.62);border:1px solid rgba(201,217,229,.22);padding:12px 12px 10px;text-align:center;backdrop-filter:blur(6px);pointer-events:none}
+  #leadDistance{font-size:clamp(20px,5vw,38px);font-weight:650;color:#33f298}.assistCaption{font-size:11px;color:rgba(229,237,241,.62);margin-top:4px}.assistState{margin-top:9px;border-top:1px solid rgba(255,255,255,.16);padding-top:8px;font-weight:700;color:#e9eef1}
+  #footer{position:absolute;left:50%;bottom:2.5vh;transform:translateX(-50%);z-index:7;min-width:44vw;max-width:78vw;padding:8px 18px;border-radius:999px;background:rgba(5,9,12,.62);border:1px solid rgba(189,209,222,.19);text-align:center;font-size:clamp(10px,2.2vw,16px);color:rgba(236,241,244,.78);backdrop-filter:blur(5px);pointer-events:none}
+  #cameraState{position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);z-index:3;padding:10px 16px;border-radius:999px;background:rgba(0,0,0,.55);font-size:13px;color:rgba(255,255,255,.72);pointer-events:none;transition:opacity .25s}.video-live #cameraState{opacity:0}
+  #hostBadge{position:absolute;right:3.5vw;bottom:2.7vh;z-index:8;font-size:9px;color:rgba(255,255,255,.28);display:none}
+  @media (orientation:landscape){#ego{width:min(29vw,460px);bottom:8vh}.speedPanel{bottom:4vh}.assistPanel{bottom:5vh}#footer{bottom:1.7vh}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="road" autoplay muted playsinline disablepictureinpicture></video>
+  <div id="shade"></div>
+  <canvas id="vision" width="1536" height="1920"></canvas>
+  <div class="top">
+    <div class="telemetry"><span id="counts">COMMA 0&nbsp;&nbsp; MODEL 0&nbsp;&nbsp; RADAR 0</span><div class="live" id="liveText">WAIT</div></div>
+    <div id="traffic"><div class="lights"><span class="lamp red" id="redLamp"></span><span class="lamp" id="midLamp"></span><span class="lamp green" id="greenLamp"></span></div><div id="trafficLabel">신호 대기</div></div>
+  </div>
+  <img id="ego" src="file:///android_res/drawable/ev6_white.png" onerror="this.style.display='none';document.getElementById('egoFallback').style.display='block'" />
+  <div id="egoFallback"></div>
+  <div class="speedPanel"><div id="speed">0</div><div class="unit">km/h</div><div id="mode">일반</div></div>
+  <div class="assistPanel"><div id="leadDistance">-- m</div><div class="assistCaption">전방 거리</div><div class="assistState" id="assistState">대기</div></div>
+  <div id="footer">콤마 연결을 기다리는 중입니다</div>
+  <div id="cameraState">카메라 연결 중…</div><div id="hostBadge"></div>
+</div>
+<script>
+(() => {
+  const stage=document.getElementById('stage'), video=document.getElementById('road'), canvas=document.getElementById('vision'), ctx=canvas.getContext('2d');
+  const counts=document.getElementById('counts'), liveText=document.getElementById('liveText'), traffic=document.getElementById('traffic'), redLamp=document.getElementById('redLamp'), greenLamp=document.getElementById('greenLamp'), trafficLabel=document.getElementById('trafficLabel');
+  const speedEl=document.getElementById('speed'), leadDistance=document.getElementById('leadDistance'), assistState=document.getElementById('assistState'), footer=document.getElementById('footer'), cameraState=document.getElementById('cameraState');
+  let pc=null, host='', generation=0, retryTimer=null, reconnectTimer=null, state=null, lastStateAt=0, drawQueued=false;
+  const clip=(v,a,b)=>Math.max(a,Math.min(b,v));
+  function sx(lat,dist){return 768 + lat*2300/(dist+6)}
+  function sy(dist){return 430 + 5580/(dist+6)}
+  function project(dist,lat){return {x:sx(lat,dist),y:sy(dist)}}
+  function pathPoint(q){return q&&q.length>=2&&isFinite(q[0])&&isFinite(q[1])?project(+q[0],+q[1]):null}
+  function drawPolyline(points, color, width, alpha){if(!points||points.length<2)return;ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();let started=false;for(const q of points){const p=pathPoint(q);if(!p)continue;if(!started){ctx.moveTo(p.x,p.y);started=true}else ctx.lineTo(p.x,p.y)}ctx.stroke();ctx.restore()}
+  function drawPath(points){if(!points||points.length<3)return;const left=[],right=[];for(const q of points){if(!q||q.length<2)continue;const d=+q[0],l=+q[1];if(!isFinite(d)||!isFinite(l)||d<0||d>150)continue;left.push(project(d,l-1.45));right.push(project(d,l+1.45))}if(left.length<3)return;ctx.save();const g=ctx.createLinearGradient(0,420,0,1450);g.addColorStop(0,'rgba(38,235,126,.03)');g.addColorStop(.45,'rgba(38,235,126,.22)');g.addColorStop(1,'rgba(35,232,119,.62)');ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(left[0].x,left[0].y);for(let i=1;i<left.length;i++)ctx.lineTo(left[i].x,left[i].y);for(let i=right.length-1;i>=0;i--)ctx.lineTo(right[i].x,right[i].y);ctx.closePath();ctx.fill();ctx.strokeStyle='rgba(57,255,148,.88)';ctx.lineWidth=5;ctx.stroke();ctx.restore()}
+  function drawLanes(lanes){if(!lanes)return;for(const l of lanes){const p=clip(+l.p||0,0,1);if(p<.12)continue;drawPolyline(l.pts,p>.55?'rgba(205,245,255,.92)':'rgba(175,218,229,.55)',3+5*p,.35+.6*p)}}
+  function drawCars(cars){if(!cars||!cars.length){leadDistance.textContent='-- m';return}let lead=null;for(const c of cars){if(+c.x>1&&Math.abs(+c.y)<2.35&&(!lead||+c.x<+lead.x))lead=c}for(const c of cars){const d=+c.x,lat=+c.y;if(!isFinite(d)||!isFinite(lat)||d<1||d>150)continue;const p=project(d,lat);const truck=c.type==='truck'||c.type==='bus';const w=clip(4300/(d+11),58,270)*(truck?1.12:1);const h=w*(truck?1.34:1.15);const isLead=lead===c;ctx.save();ctx.strokeStyle=isLead?'rgba(46,255,146,.96)':'rgba(215,229,236,.62)';ctx.lineWidth=isLead?5:3;ctx.fillStyle=isLead?'rgba(28,238,126,.07)':'rgba(220,235,242,.025)';ctx.beginPath();const x=p.x-w/2,y=p.y-h*.68,r=Math.min(18,w*.13);roundRect(ctx,x,y,w,h,r);ctx.fill();ctx.stroke();if(isLead){ctx.fillStyle='#31f291';ctx.font='600 '+clip(64-d*.45,30,56)+'px sans-serif';ctx.textAlign='center';ctx.fillText(Math.round(d)+' m',p.x,y+h+48)}ctx.restore()}if(lead)leadDistance.textContent=Math.max(0,Math.round(+lead.x))+' m';else leadDistance.textContent='-- m'}
+  function roundRect(c,x,y,w,h,r){c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath()}
+  function drawBlindspots(s){ctx.save();ctx.lineWidth=8;if(s.leftBlindspot){ctx.strokeStyle='rgba(255,94,84,.92)';ctx.strokeRect(35,920,220,330)}if(s.rightBlindspot){ctx.strokeStyle='rgba(255,94,84,.92)';ctx.strokeRect(1281,920,220,330)}ctx.restore()}
+  function draw(){drawQueued=false;ctx.clearRect(0,0,1536,1920);if(!state)return;drawPath(state.path);drawLanes(state.lanes);drawCars(state.cars);drawBlindspots(state)}
+  function scheduleDraw(){if(drawQueued)return;drawQueued=true;requestAnimationFrame(draw)}
+  function updateTraffic(v){v=+v||0;if(v!==1&&v!==2){traffic.style.display='none';return}traffic.style.display='block';redLamp.classList.toggle('on',v===1);greenLamp.classList.toggle('on',v===2);trafficLabel.textContent=v===1?'당근 판단 · 정지':'당근 판단 · 출발'}
+  function updateState(s){state=s||{};lastStateAt=Date.now();const cars=Array.isArray(state.cars)?state.cars.length:0, radar=+state.radarCount||0;counts.textContent='COMMA 1   MODEL '+cars+'   RADAR '+radar;liveText.textContent='LIVE';liveText.style.color='#2cf49a';speedEl.textContent=Math.max(0,Math.round(+state.speed||0));assistState.textContent=state.enabled?'ACTIVE':'READY';assistState.style.color=state.enabled?'#39f49d':'#e9eef1';footer.textContent=state.enabled?'차량을 인식하고 주행을 보조합니다':'콤마 비전 데이터를 실시간 표시합니다';updateTraffic(state.trafficState);scheduleDraw()}
+  function cleanup(){clearTimeout(retryTimer);clearTimeout(reconnectTimer);retryTimer=reconnectTimer=null;try{if(pc){pc.ontrack=null;pc.onconnectionstatechange=null;pc.close()}}catch(e){}pc=null;try{if(video.srcObject){video.srcObject.getTracks().forEach(t=>t.stop());video.srcObject=null}}catch(e){}stage.classList.remove('video-live')}
+  function waitIce(peer,ms){if(peer.iceGatheringState==='complete')return Promise.resolve();return new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(t);peer.removeEventListener('icegatheringstatechange',on);resolve()};const on=()=>{if(peer.iceGatheringState==='complete')finish()};peer.addEventListener('icegatheringstatechange',on);const t=setTimeout(finish,ms)})}
+  async function connectHost(nextHost){nextHost=String(nextHost||'').trim();if(!nextHost)return;if(nextHost===host&&pc&&['connected','connecting'].includes(pc.connectionState))return;host=nextHost;const gen=++generation;cleanup();cameraState.textContent='카메라 연결 중…';cameraState.style.opacity='1';try{const peer=new RTCPeerConnection({iceServers:[]});pc=peer;peer.addTransceiver('video',{direction:'recvonly'});peer.ontrack=e=>{if(gen!==generation)return;video.srcObject=e.streams&&e.streams[0]?e.streams[0]:new MediaStream([e.track]);video.play().catch(()=>{});};peer.onconnectionstatechange=()=>{if(gen!==generation)return;const st=peer.connectionState;if(st==='failed'||st==='closed'||st==='disconnected'){reconnectTimer=setTimeout(()=>{if(gen===generation)connectHost(host)},1500)}};const offer=await peer.createOffer();await peer.setLocalDescription(offer);await waitIce(peer,900);if(gen!==generation)return;const res=await fetch('http://'+host+':5001/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sdp:peer.localDescription.sdp,cameras:['road'],bridge_services_in:[],bridge_services_out:[],client_id:'carrotvision-android-v3',takeover:true,carrot_state:false})});if(!res.ok)throw new Error('stream '+res.status);const ans=await res.json();if(gen!==generation)return;await peer.setRemoteDescription(ans)}catch(e){if(gen!==generation)return;cameraState.textContent='카메라 재연결 중…';retryTimer=setTimeout(()=>{if(gen===generation)connectHost(host)},1800)}}
+  video.addEventListener('playing',()=>{stage.classList.add('video-live');cameraState.style.opacity='0'});
+  video.addEventListener('stalled',()=>stage.classList.remove('video-live'));
+  setInterval(()=>{if(Date.now()-lastStateAt>2500){counts.textContent='COMMA 0   MODEL 0   RADAR 0';liveText.textContent='WAIT';liveText.style.color='#f3b44f';assistState.textContent='대기';footer.textContent='콤마 연결을 기다리는 중입니다'}},700);
+  window.CarrotVision={connectHost,updateState,stop:()=>{generation++;cleanup()}};
+  setTimeout(()=>{if(!host)connectHost('10.183.91.124')},900);
+})();
+</script>
+</body>
+</html>
