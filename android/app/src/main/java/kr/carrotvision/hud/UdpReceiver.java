@@ -16,7 +16,10 @@ import java.util.function.Consumer;
 
 final class UdpReceiver extends Thread {
   private static final int DISCOVERY_PORT = 8856;
-  private static final long DISCOVERY_INTERVAL_MS = 2000L;
+  private static final long HEARTBEAT_INTERVAL_MS = 4000L;
+  private static final long LOST_AFTER_MS = 2500L;
+  private static final long BROADCAST_RETRY_MS = 1500L;
+  private static final long SUBNET_SCAN_RETRY_MS = 5000L;
   private static final byte[] DISCOVERY = "CV_DISCOVER_V1".getBytes(StandardCharsets.US_ASCII);
 
   private final int port;
@@ -26,7 +29,11 @@ final class UdpReceiver extends Thread {
   private final AtomicBoolean deliveryScheduled = new AtomicBoolean(false);
   private volatile boolean running = true;
   private DatagramSocket socket;
-  private long lastDiscovery;
+  private InetAddress lastSender;
+  private long lastPacketAt;
+  private long lastHeartbeatAt;
+  private long lastBroadcastAt;
+  private long lastSubnetScanAt;
 
   private final Runnable deliverLatest = new Runnable() {
     @Override public void run() {
@@ -48,46 +55,79 @@ final class UdpReceiver extends Thread {
     try {
       socket = new DatagramSocket(port);
       socket.setBroadcast(true);
-      socket.setSoTimeout(500);
-      sendDiscovery();
+      socket.setSoTimeout(250);
+      try { socket.setReceiveBufferSize(1024 * 1024); } catch (Exception ignored) { }
+      aggressiveDiscovery();
+
       while (running) {
         try {
           DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
           socket.receive(packet);
           String json = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
-          latestFrame.set(DriveFrame.parse(new JSONObject(json)));
+          DriveFrame parsed = DriveFrame.parse(new JSONObject(json));
+          lastSender = packet.getAddress();
+          lastPacketAt = System.currentTimeMillis();
+          latestFrame.set(parsed);
           scheduleDelivery();
         } catch (SocketTimeoutException ignored) { }
           catch (org.json.JSONException | IllegalArgumentException invalid) {
             android.util.Log.w("CarrotVision", "Invalid or stale packet");
           }
-        if (System.currentTimeMillis() - lastDiscovery >= DISCOVERY_INTERVAL_MS) sendDiscovery();
+
+        long now = System.currentTimeMillis();
+        boolean connected = lastPacketAt > 0 && now - lastPacketAt < LOST_AFTER_MS;
+        if (connected) {
+          // Keep the Comma bridge's client lease alive with one tiny unicast packet.
+          if (lastSender != null && now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
+            sendDiscovery(lastSender);
+            lastHeartbeatAt = now;
+          }
+        } else {
+          if (now - lastBroadcastAt >= BROADCAST_RETRY_MS) {
+            sendGlobalBroadcast();
+            lastBroadcastAt = now;
+          }
+          // Only scan the /24 while disconnected. The old build scanned continuously,
+          // which created unnecessary Wi-Fi traffic on some hotspot/Android devices.
+          if (now - lastSubnetScanAt >= SUBNET_SCAN_RETRY_MS) {
+            scanLocalSubnet();
+            lastSubnetScanAt = now;
+          }
+        }
       }
     } catch (Exception error) {
       if (running) android.util.Log.e("CarrotVision", "UDP receiver stopped", error);
     }
   }
 
-  private void sendDiscovery() {
-    if (socket == null || socket.isClosed()) return;
-    lastDiscovery = System.currentTimeMillis();
-    try {
-      // Legacy/global broadcast first.
-      DatagramPacket global = new DatagramPacket(
-          DISCOVERY, DISCOVERY.length, InetAddress.getByName("255.255.255.255"), DISCOVERY_PORT);
-      socket.send(global);
-    } catch (Exception ignored) { }
+  private void aggressiveDiscovery() {
+    long now = System.currentTimeMillis();
+    sendGlobalBroadcast();
+    scanLocalSubnet();
+    lastBroadcastAt = now;
+    lastSubnetScanAt = now;
+  }
 
-    // Android hotspots can block client-to-client broadcast. Probe the local /24 with
-    // tiny unicast discovery packets so a running Comma bridge can answer directly.
+  private void sendGlobalBroadcast() {
+    try {
+      sendDiscovery(InetAddress.getByName("255.255.255.255"));
+    } catch (Exception ignored) { }
+  }
+
+  private void sendDiscovery(InetAddress address) {
+    if (socket == null || socket.isClosed() || address == null) return;
+    try {
+      DatagramPacket packet = new DatagramPacket(DISCOVERY, DISCOVERY.length, address, DISCOVERY_PORT);
+      socket.send(packet);
+    } catch (Exception ignored) { }
+  }
+
+  private void scanLocalSubnet() {
     String prefix = privateIpv4Prefix();
     if (prefix == null) return;
     for (int i = 1; i <= 254 && running; i++) {
-      try {
-        InetAddress address = InetAddress.getByName(prefix + i);
-        DatagramPacket packet = new DatagramPacket(DISCOVERY, DISCOVERY.length, address, DISCOVERY_PORT);
-        socket.send(packet);
-      } catch (Exception ignored) { }
+      try { sendDiscovery(InetAddress.getByName(prefix + i)); }
+      catch (Exception ignored) { }
     }
   }
 
