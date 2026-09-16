@@ -107,7 +107,7 @@ final class HudView extends View {
     Path a=new Path();a.moveTo(xy[0],xy[1]);for(int i=2;i<xy.length;i+=2)a.lineTo(xy[i],xy[i+1]);a.close();return a;
   }
   private void text(Canvas c,String s,float x,float y,float size,int color,Paint.Align align){
-    p.setShader(null);p.setColorFilter(null);p.setStyle(Paint.Style.FILL);p.setColor(color);
+    p.setShader(null);p.setColorFilter(null);p.setStyle(Paint.Style.FILL);p.setColor(color);p.setAlpha(255);
     p.setTextSize(size);p.setTextAlign(align);c.drawText(s,x,y,p);
   }
   private int preserveAspect(Canvas c,float pivotX,float pivotY){
@@ -137,6 +137,8 @@ final class HudView extends View {
     if(connected)drawPath(c);
     for(LaneTrack lane:laneTracks)drawLane(c,lane,drawNow);
     if(connected){
+      drawRadarPoints(c);
+      drawModelLeads(c);
       sortedCars.clear();
       sortedCars.addAll(frame.cars);
       Collections.sort(sortedCars,FAR_TO_NEAR);
@@ -144,7 +146,7 @@ final class HudView extends View {
       float blend=interpolationBlend(drawNow);
       for(int i=first;i<sortedCars.size();i++){
         DriveFrame.Car car=sortedCars.get(i);
-        if(!Float.isFinite(car.x)||!Float.isFinite(car.y)||car.x<1||car.x>150||car.p<.5f)continue;
+        if(!Float.isFinite(car.x)||!Float.isFinite(car.y)||car.x<1||car.x>150)continue;
         DriveFrame.Car old=previousCar(car);
         float distance=old==null?car.x:lerp(old.x,car.x,blend);
         float lateral=old==null?car.y:lerp(old.y,car.y,blend);
@@ -158,6 +160,13 @@ final class HudView extends View {
     drawEgo(c);
     c.restoreToCount(egoSave);
     c.restoreToCount(worldSave);
+
+    if(connected){
+      int dbgSave=preserveAspect(c,60,78);
+      text(c,"COMMA "+frame.cars.size()+"   MODEL "+frame.modelLeads.size()+"   RADAR "+frame.radarPoints.size(),
+          60,78,22,0xff8f9499,Paint.Align.LEFT);
+      c.restoreToCount(dbgSave);
+    }
 
     if(connected && (frame.trafficState==1 || frame.trafficState==2)){
       int signalSave=preserveAspect(c,1315,149);
@@ -199,6 +208,33 @@ final class HudView extends View {
     c.restoreToCount(save);
   }
 
+  private void drawRadarPoints(Canvas c){
+    p.setShader(null);p.setColorFilter(null);p.setStyle(Paint.Style.FILL);
+    for(DriveFrame.RadarPoint r:frame.radarPoints){
+      if(!Float.isFinite(r.x)||!Float.isFinite(r.y)||r.x<0||r.x>150)continue;
+      float x=sx(r.y,r.x),y=sy(r.x);
+      float radius=Math.max(3f,Math.min(11f,90f/(r.x+4f)));
+      int color=r.source!=null&&r.source.toLowerCase(Locale.US).contains("corner")?0xffffb547:0xff38c8ff;
+      p.setColor(color);p.setAlpha(r.measured?220:105);
+      c.drawCircle(x,y,radius,p);
+    }
+    p.setAlpha(255);
+  }
+
+  private void drawModelLeads(Canvas c){
+    p.setShader(null);p.setColorFilter(null);p.setStrokeJoin(Paint.Join.ROUND);
+    for(DriveFrame.ModelLead m:frame.modelLeads){
+      if(!Float.isFinite(m.x)||!Float.isFinite(m.y)||m.x<0||m.x>150||m.p<=0f)continue;
+      float x=sx(m.y,m.x),y=sy(m.x);
+      float size=Math.max(14f,Math.min(46f,520f/(m.x+10f)));
+      int alpha=Math.max(30,Math.min(255,Math.round(255*m.p)));
+      Path d=new Path();d.moveTo(x,y-size);d.lineTo(x+size,y);d.lineTo(x,y+size);d.lineTo(x-size,y);d.close();
+      p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(Math.max(3f,size*.12f));p.setColor(0xffff8a3d);p.setAlpha(alpha);
+      c.drawPath(d,p);
+    }
+    p.setAlpha(255);p.setStrokeJoin(Paint.Join.MITER);p.setStyle(Paint.Style.FILL);
+  }
+
   private void drawBlindspotWarning(Canvas c,boolean left,boolean active,boolean turnSignal){
     if(!active)return;
     boolean urgent=turnSignal && (SystemClock.elapsedRealtime()/280)%2==0;
@@ -217,7 +253,6 @@ final class HudView extends View {
     p.setStyle(Paint.Style.FILL);p.setStrokeJoin(Paint.Join.MITER);
     text(c,"!",cx,cy+24,60,color,Paint.Align.CENTER);
 
-    // Small side marker points toward the OEM blind-spot side.
     Path pointer=new Path();
     if(left){pointer.moveTo(cx-72,cy);pointer.lineTo(cx-112,cy-24);pointer.lineTo(cx-112,cy+24);}
     else{pointer.moveTo(cx+72,cy);pointer.lineTo(cx+112,cy-24);pointer.lineTo(cx+112,cy+24);}
