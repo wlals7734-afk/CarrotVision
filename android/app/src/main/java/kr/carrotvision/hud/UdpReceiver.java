@@ -24,12 +24,14 @@ final class UdpReceiver extends Thread {
 
   private final int port;
   private final Consumer<DriveFrame> callback;
+  private final Consumer<String> hostCallback;
   private final Handler main = new Handler(Looper.getMainLooper());
   private final AtomicReference<DriveFrame> latestFrame = new AtomicReference<>();
   private final AtomicBoolean deliveryScheduled = new AtomicBoolean(false);
   private volatile boolean running = true;
   private DatagramSocket socket;
   private InetAddress lastSender;
+  private String lastHostNotified;
   private long lastPacketAt;
   private long lastHeartbeatAt;
   private long lastBroadcastAt;
@@ -45,8 +47,13 @@ final class UdpReceiver extends Thread {
   };
 
   UdpReceiver(int port, Consumer<DriveFrame> callback) {
+    this(port, callback, null);
+  }
+
+  UdpReceiver(int port, Consumer<DriveFrame> callback, Consumer<String> hostCallback) {
     this.port = port;
     this.callback = callback;
+    this.hostCallback = hostCallback;
     setName("CarrotUdp");
   }
 
@@ -67,6 +74,7 @@ final class UdpReceiver extends Thread {
           DriveFrame parsed = DriveFrame.parse(new JSONObject(json));
           lastSender = packet.getAddress();
           lastPacketAt = System.currentTimeMillis();
+          notifyHost(lastSender);
           latestFrame.set(parsed);
           scheduleDelivery();
         } catch (SocketTimeoutException ignored) { }
@@ -77,7 +85,6 @@ final class UdpReceiver extends Thread {
         long now = System.currentTimeMillis();
         boolean connected = lastPacketAt > 0 && now - lastPacketAt < LOST_AFTER_MS;
         if (connected) {
-          // Keep the Comma bridge's client lease alive with one tiny unicast packet.
           if (lastSender != null && now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
             sendDiscovery(lastSender);
             lastHeartbeatAt = now;
@@ -87,8 +94,6 @@ final class UdpReceiver extends Thread {
             sendGlobalBroadcast();
             lastBroadcastAt = now;
           }
-          // Only scan the /24 while disconnected. The old build scanned continuously,
-          // which created unnecessary Wi-Fi traffic on some hotspot/Android devices.
           if (now - lastSubnetScanAt >= SUBNET_SCAN_RETRY_MS) {
             scanLocalSubnet();
             lastSubnetScanAt = now;
@@ -98,6 +103,14 @@ final class UdpReceiver extends Thread {
     } catch (Exception error) {
       if (running) android.util.Log.e("CarrotVision", "UDP receiver stopped", error);
     }
+  }
+
+  private void notifyHost(InetAddress sender) {
+    if (sender == null || hostCallback == null) return;
+    final String host = sender.getHostAddress();
+    if (host == null || host.equals(lastHostNotified)) return;
+    lastHostNotified = host;
+    main.post(() -> { if (running) hostCallback.accept(host); });
   }
 
   private void aggressiveDiscovery() {
