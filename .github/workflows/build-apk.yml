@@ -31,14 +31,21 @@ jobs:
         run: |
           javac -d /tmp/carrot-lane-check android/app/src/main/java/kr/carrotvision/hud/ModelProjection.java android/validation/ModelProjectionCheck.java
           java -cp /tmp/carrot-lane-check kr.carrotvision.hud.ModelProjectionCheck
-      - name: Stable comma-only release UI
+      - name: Stable no-cap vehicle release UI
         run: |
-          sed -i '/^[[:space:]]*drawRadarPoints(c);[[:space:]]*$/d' android/app/src/main/java/kr/carrotvision/hud/HudView.java
-          sed -i '/^[[:space:]]*drawModelLeads(c);[[:space:]]*$/d' android/app/src/main/java/kr/carrotvision/hud/HudView.java
-          sed -i 's/SystemClock\.elapsedRealtime()-received<1200/SystemClock.elapsedRealtime()-received<2500/' android/app/src/main/java/kr/carrotvision/hud/HudView.java
-          ! grep -q '^[[:space:]]*drawRadarPoints(c);' android/app/src/main/java/kr/carrotvision/hud/HudView.java
-          ! grep -q '^[[:space:]]*drawModelLeads(c);' android/app/src/main/java/kr/carrotvision/hud/HudView.java
-          grep -q 'SystemClock.elapsedRealtime()-received<2500' android/app/src/main/java/kr/carrotvision/hud/HudView.java
+          HUD=android/app/src/main/java/kr/carrotvision/hud/HudView.java
+          sed -i '/^[[:space:]]*drawRadarPoints(c);[[:space:]]*$/d' "$HUD"
+          sed -i '/^[[:space:]]*drawModelLeads(c);[[:space:]]*$/d' "$HUD"
+          sed -i '/^[[:space:]]*int first=Math.max(0,sortedCars.size()-8);[[:space:]]*$/d' "$HUD"
+          sed -i 's/for(int i=first;i<sortedCars.size();i++)/for(int i=0;i<sortedCars.size();i++)/' "$HUD"
+          sed -i 's/private static final long MAX_INTERPOLATION_MS = 80L;/private static final long MAX_INTERPOLATION_MS = 120L;/' "$HUD"
+          sed -i 's/SystemClock\.elapsedRealtime()-received<1200/SystemClock.elapsedRealtime()-received<2500/' "$HUD"
+          ! grep -q '^[[:space:]]*drawRadarPoints(c);' "$HUD"
+          ! grep -q '^[[:space:]]*drawModelLeads(c);' "$HUD"
+          ! grep -q 'sortedCars.size()-8' "$HUD"
+          grep -q 'for(int i=0;i<sortedCars.size();i++)' "$HUD"
+          grep -q 'MAX_INTERPOLATION_MS = 120L' "$HUD"
+          grep -q 'SystemClock.elapsedRealtime()-received<2500' "$HUD"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
