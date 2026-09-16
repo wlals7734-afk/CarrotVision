@@ -14,6 +14,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 import java.util.List;
 
@@ -93,7 +94,7 @@ public class MainActivity extends Activity {
         "window.CarrotVision&&window.CarrotVision.connectHost('" + host.replace("'", "") + "')", null);
   }
 
-  private static JSONArray pointsJson(List<float[]> points, int maxPoints) {
+  private static JSONArray pointsJson(List<float[]> points, int maxPoints) throws JSONException {
     JSONArray out = new JSONArray();
     if (points == null || points.isEmpty()) return out;
     int step = Math.max(1, (int)Math.ceil(points.size() / (double)Math.max(1, maxPoints)));
