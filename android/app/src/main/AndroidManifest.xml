@@ -3,7 +3,7 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <application android:theme="@style/AppTheme" android:label="Carrot Vision" android:allowBackup="false" android:usesCleartextTraffic="true">
+    <application android:theme="@style/AppTheme" android:label="Carrot Vision 3" android:allowBackup="false" android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:screenOrientation="unspecified" android:configChanges="orientation|screenSize" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
