@@ -18,6 +18,17 @@ DISCOVERY_MAGIC = b"CV_DISCOVER_V1"
 CLIENT_TTL = 12.0
 TX_HZ = 15.0
 TX_INTERVAL = 1.0 / TX_HZ
+SIDE_CONFIRM_FRAMES = 2
+SIDE_HOLD_SEC = 0.55
+SIDE_MATCH_DX = 12.0
+SIDE_MATCH_DY = 2.0
+SIDE_MIN_LATERAL = 1.25
+SIDE_MAX_LATERAL = 5.8
+SIDE_MOVING_EGO_MPS = 5.0
+SIDE_MIN_WORLD_SPEED_MPS = 2.0
+MODEL_MATCH_DX = 8.0
+MODEL_MATCH_DY = 2.2
+MODEL_MATCH_MIN_P = 0.45
 
 
 def points(line):
@@ -82,7 +93,7 @@ def _lead_to_car(lead, source):
 
 
 def comma_ui_cars(radar_state):
-    """Mirror only lead slots selected by Comma/CarrotPilot itself."""
+    """Read the lead slots selected by Comma/CarrotPilot itself."""
     if radar_state is None:
         return []
     result = []
@@ -146,6 +157,83 @@ def radar_points(live_tracks):
     return result
 
 
+def model_matches_car(car, leads):
+    """Use a model lead only as supporting evidence for a side object, never as a car by itself."""
+    for lead in leads:
+        if float(lead.get("p", 0.0)) < MODEL_MATCH_MIN_P:
+            continue
+        if abs(float(lead.get("x", 999.0)) - car["x"]) <= MODEL_MATCH_DX and \
+           abs(float(lead.get("y", 999.0)) - car["y"]) <= MODEL_MATCH_DY:
+            return True
+    return False
+
+
+def side_candidate_plausible(car, ego_speed, model_lead_list, blindspot_active):
+    """Reject common stationary divider/guardrail echoes while preserving real side traffic."""
+    lateral = abs(float(car["y"]))
+    if lateral < SIDE_MIN_LATERAL or lateral > SIDE_MAX_LATERAL:
+        return False
+
+    source = car.get("source", "")
+    if source == "commaLeadLeft" and car["y"] >= 0:
+        return False
+    if source == "commaLeadRight" and car["y"] <= 0:
+        return False
+
+    # BSM is strong side-vehicle evidence on supported Hyundai/Kia cars.
+    if blindspot_active:
+        return True
+
+    # A stationary divider/guardrail seen from a moving car has vRel ~= -vEgo.
+    # Preserve slow/stopped real vehicles if the vision model also supports the object.
+    if ego_speed >= SIDE_MOVING_EGO_MPS:
+        estimated_world_speed = ego_speed + float(car.get("v", 0.0))
+        if abs(estimated_world_speed) < SIDE_MIN_WORLD_SPEED_MPS and not model_matches_car(car, model_lead_list):
+            return False
+    return True
+
+
+def _same_side_object(previous, current):
+    if previous is None or current is None:
+        return False
+    return abs(previous["x"] - current["x"]) <= SIDE_MATCH_DX and \
+           abs(previous["y"] - current["y"]) <= SIDE_MATCH_DY
+
+
+def stabilize_side_cars(raw_cars, side_tracks, now, ego_speed, model_lead_list,
+                        left_blindspot=False, right_blindspot=False):
+    """Debounce side leads: 2 hits to appear, 0.55 s dropout hold to avoid flicker."""
+    output = [c for c in raw_cars if c.get("source") not in ("commaLeadLeft", "commaLeadRight")]
+    by_source = {c.get("source"): c for c in raw_cars}
+
+    for source, blindspot in (("commaLeadLeft", left_blindspot), ("commaLeadRight", right_blindspot)):
+        state = side_tracks.setdefault(source, {"car": None, "hits": 0, "visible": False, "last_seen": 0.0})
+        candidate = by_source.get(source)
+        if candidate is not None and not side_candidate_plausible(candidate, ego_speed, model_lead_list, blindspot):
+            candidate = None
+
+        if candidate is not None:
+            if _same_side_object(state["car"], candidate):
+                state["hits"] += 1
+            else:
+                state["hits"] = 1
+            state["car"] = candidate
+            state["last_seen"] = now
+            if state["hits"] >= SIDE_CONFIRM_FRAMES or blindspot:
+                state["visible"] = True
+        elif state["visible"] and state["car"] is not None and now - state["last_seen"] <= SIDE_HOLD_SEC:
+            pass
+        else:
+            state["car"] = None
+            state["hits"] = 0
+            state["visible"] = False
+
+        if state["visible"] and state["car"] is not None:
+            output.append(state["car"])
+
+    return output
+
+
 def traffic_state(sm, now):
     if fresh(sm, "longitudinalPlan", now):
         state = optional_field(sm["longitudinalPlan"], "trafficState", 0)
@@ -202,11 +290,12 @@ def main():
 
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.13 low-load started; 15 Hz TX + auto-discovery + selected Comma leads", flush=True)
+    print("CarrotVision bridge v2.14 side-stable started; 15 Hz TX + side debounce + stationary-echo filter", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     discovery = open_discovery_socket()
     clients = {}
+    side_tracks = {}
 
     while True:
         sm.update(50)
@@ -219,10 +308,12 @@ def main():
         cs, model = sm["carState"], sm["modelV2"]
         left_blindspot = bool(getattr(cs, "leftBlindspot", False))
         right_blindspot = bool(getattr(cs, "rightBlindspot", False))
-
-        cars = comma_ui_cars(sm["radarState"]) if fresh(sm, "radarState", now) else []
         raw_model_leads = model_leads(model)
         raw_radar_points = radar_points(sm["liveTracks"]) if "liveTracks" in services and fresh(sm, "liveTracks", now) else []
+
+        raw_cars = comma_ui_cars(sm["radarState"]) if fresh(sm, "radarState", now) else []
+        cars = stabilize_side_cars(raw_cars, side_tracks, now, float(cs.vEgo), raw_model_leads,
+                                   left_blindspot, right_blindspot)
 
         lanes = [dict(p=float(prob), pts=points(line))
                  for line, prob in zip(model.laneLines, model.laneLineProbs)]
