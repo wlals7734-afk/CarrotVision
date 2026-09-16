@@ -10,10 +10,16 @@ functions = ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionD
 namespace = {"math": math}
 exec(compile(functions, "bridge", "exec"), namespace)
 comma_ui_cars = namespace["comma_ui_cars"]
+model_leads = namespace["model_leads"]
+radar_points = namespace["radar_points"]
 
 
 def track(x, y, status=True, radar=True, vrel=0.0, model_prob=0.0):
     return Obj(dRel=x, yRel=y, status=status, radar=radar, vRel=vrel, modelProb=model_prob)
+
+
+def model_track(x, y, p, v=0.0):
+    return Obj(x=[x], y=[y], v=[v], prob=p)
 
 
 class BridgeTracksTest(unittest.TestCase):
@@ -45,7 +51,7 @@ class BridgeTracksTest(unittest.TestCase):
         self.assertEqual([round(c["y"],1) for c in cars], [-0.2,0.3,-3.4,3.6])
         self.assertTrue(all(c["p"] == 1.0 and c["type"] == "car" for c in cars))
 
-    def test_raw_radar_lists_do_not_create_cars(self):
+    def test_raw_radar_lists_do_not_create_selected_cars(self):
         state = Obj(
             leadOne=track(0,0,status=False), leadTwo=track(0,0,status=False),
             leadLeft=track(0,0,status=False), leadRight=track(0,0,status=False),
@@ -59,6 +65,24 @@ class BridgeTracksTest(unittest.TestCase):
         cars = comma_ui_cars(state)
         self.assertEqual(len(cars), 1)
         self.assertEqual(cars[0]["source"], "commaLeadOne")
+
+    def test_model_leads_preserve_probability_without_threshold(self):
+        model = Obj(leadsV3=[model_track(30, 0.5, 0.05, -1.0), model_track(50, -2.0, 0.82, 2.0)])
+        leads = model_leads(model)
+        self.assertEqual(len(leads), 2)
+        self.assertAlmostEqual(leads[0]["p"], 0.05)
+        self.assertEqual((leads[1]["x"], leads[1]["y"]), (50.0, -2.0))
+
+    def test_live_radar_points_preserve_source_and_measurement(self):
+        live = Obj(points=[
+            Obj(dRel=12.0, yRel=3.0, vRel=-2.0, measured=True, radarSource="corner235"),
+            Obj(dRel=40.0, yRel=-1.5, vRel=1.0, measured=False, radarSource="frontRadar"),
+        ])
+        pts = radar_points(live)
+        self.assertEqual(len(pts), 2)
+        self.assertEqual(pts[0]["source"], "corner235")
+        self.assertEqual(pts[0]["y"], -3.0)
+        self.assertTrue(pts[0]["measured"])
 
     def test_invalid_selected_leads_are_rejected_for_render_safety(self):
         cases = [
