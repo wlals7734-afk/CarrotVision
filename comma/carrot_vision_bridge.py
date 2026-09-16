@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only bridge: mirror Comma/CarrotPilot perception state without changing controls."""
+"""Read-only bridge: visualize Comma camera vehicle perception without changing controls."""
 import json
 import math
 import os
@@ -18,17 +18,17 @@ DISCOVERY_MAGIC = b"CV_DISCOVER_V1"
 CLIENT_TTL = 12.0
 TX_HZ = 15.0
 TX_INTERVAL = 1.0 / TX_HZ
-SIDE_CONFIRM_FRAMES = 2
-SIDE_HOLD_SEC = 0.55
-SIDE_MATCH_DX = 12.0
-SIDE_MATCH_DY = 2.0
-SIDE_MIN_LATERAL = 1.25
-SIDE_MAX_LATERAL = 5.8
-SIDE_MOVING_EGO_MPS = 5.0
-SIDE_MIN_WORLD_SPEED_MPS = 2.0
-MODEL_MATCH_DX = 8.0
-MODEL_MATCH_DY = 2.2
-MODEL_MATCH_MIN_P = 0.45
+
+# Display-layer filtering/tracking only. This does not modify openpilot/CarrotPilot perception or control.
+CAMERA_MIN_PROB = 0.50
+VEHICLE_MAX_LATERAL = 7.0
+TRACK_MATCH_DX = 12.0
+TRACK_MATCH_DY = 2.4
+TRACK_HOLD_SEC = 0.45
+TRACK_CONFIRM_FRAMES = 2
+TRACK_SMOOTH_X = 0.68
+TRACK_SMOOTH_Y = 0.58
+RADAR_MATCH_DY = 1.8
 
 
 def points(line):
@@ -75,12 +75,11 @@ def optional_field(obj, name, default=None):
 
 
 def _lead_to_car(lead, source):
-    """Convert one Comma-selected lead to HUD coordinates without re-classifying it."""
+    """Convert one Comma-selected radar lead to HUD coordinates."""
     if lead is None or not optional_field(lead, "status", False):
         return None
     try:
         x = float(optional_field(lead, "dRel", 0.0))
-        # radarState yRel is positive LEFT; HUD/model lateral is positive RIGHT.
         y = -float(optional_field(lead, "yRel", 0.0))
         v = float(optional_field(lead, "vRel", 0.0))
     except (TypeError, ValueError, OverflowError):
@@ -93,7 +92,7 @@ def _lead_to_car(lead, source):
 
 
 def comma_ui_cars(radar_state):
-    """Read the lead slots selected by Comma/CarrotPilot itself."""
+    """Compatibility helper for the four Comma-selected lead slots."""
     if radar_state is None:
         return []
     result = []
@@ -110,7 +109,7 @@ def comma_ui_cars(radar_state):
 
 
 def model_leads(model):
-    """Mirror raw modelV2.leadsV3 candidates, preserving their probability."""
+    """Read every camera lead hypothesis exposed by modelV2, preserving probability."""
     result = []
     if model is None:
         return result
@@ -136,7 +135,7 @@ def model_leads(model):
 
 
 def radar_points(live_tracks):
-    """Mirror raw liveTracks radar returns. These are radar points, not vehicle classifications."""
+    """Compatibility helper; raw radar points are not rendered in the release UI."""
     result = []
     if live_tracks is None:
         return result
@@ -157,80 +156,151 @@ def radar_points(live_tracks):
     return result
 
 
-def model_matches_car(car, leads):
-    """Use a model lead only as supporting evidence for a side object, never as a car by itself."""
-    for lead in leads:
-        if float(lead.get("p", 0.0)) < MODEL_MATCH_MIN_P:
+def _radar_track_to_car(lead):
+    if lead is None or not optional_field(lead, "status", False):
+        return None
+    try:
+        x = float(optional_field(lead, "dRel", 0.0))
+        y = -float(optional_field(lead, "yRel", 0.0))
+        v = float(optional_field(lead, "vRel", 0.0))
+        track_id = int(optional_field(lead, "radarTrackId", -1))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not all(math.isfinite(value) for value in (x, y, v)):
+        return None
+    if not (1.0 <= x <= 150.0 and abs(y) <= VEHICLE_MAX_LATERAL + 1.5):
+        return None
+    return dict(x=x, y=y, v=v, track_id=track_id)
+
+
+def all_radar_lane_tracks(radar_state):
+    """Collect all lane-grouped radar tracks only as position support, never as vehicles by themselves."""
+    if radar_state is None:
+        return []
+    result = []
+    seen_ids = set()
+    for field in ("leadsCenter", "leadsLeft", "leadsRight"):
+        for lead in optional_field(radar_state, field, ()) or ():
+            item = _radar_track_to_car(lead)
+            if item is None:
+                continue
+            rid = item["track_id"]
+            if rid >= 0 and rid in seen_ids:
+                continue
+            if rid >= 0:
+                seen_ids.add(rid)
+            result.append(item)
+    # Some forks/vehicles may not populate the lists. Add selected slots as fallback support.
+    for field in ("leadOne", "leadTwo", "leadLeft", "leadRight"):
+        item = _radar_track_to_car(optional_field(radar_state, field))
+        if item is None:
             continue
-        if abs(float(lead.get("x", 999.0)) - car["x"]) <= MODEL_MATCH_DX and \
-           abs(float(lead.get("y", 999.0)) - car["y"]) <= MODEL_MATCH_DY:
-            return True
-    return False
+        rid = item["track_id"]
+        if rid >= 0 and rid in seen_ids:
+            continue
+        if rid >= 0:
+            seen_ids.add(rid)
+        result.append(item)
+    return result
 
 
-def side_candidate_plausible(car, ego_speed, model_lead_list, blindspot_active):
-    """Reject common stationary divider/guardrail echoes while preserving real side traffic."""
-    lateral = abs(float(car["y"]))
-    if lateral < SIDE_MIN_LATERAL or lateral > SIDE_MAX_LATERAL:
-        return False
+def camera_supported_candidates(model_lead_list, radar_state, ego_speed):
+    """Create vehicle display candidates only from camera car-lead hypotheses.
 
-    source = car.get("source", "")
-    if source == "commaLeadLeft" and car["y"] >= 0:
-        return False
-    if source == "commaLeadRight" and car["y"] <= 0:
-        return False
+    Radar is used only to refine position when a nearby track agrees. Radar-only objects are never promoted
+    to vehicles, preventing dividers/guardrails from appearing solely because of a radar return.
+    """
+    radar_tracks = all_radar_lane_tracks(radar_state)
+    candidates = []
+    for lead in model_lead_list:
+        p = float(lead.get("p", 0.0))
+        x = float(lead.get("x", 0.0))
+        y = float(lead.get("y", 0.0))
+        if p < CAMERA_MIN_PROB or x < 1.0 or x > 150.0 or abs(y) > VEHICLE_MAX_LATERAL:
+            continue
 
-    # BSM is strong side-vehicle evidence on supported Hyundai/Kia cars.
-    if blindspot_active:
-        return True
+        best = None
+        best_score = float("inf")
+        dx_limit = max(5.0, x * 0.35)
+        for radar in radar_tracks:
+            dx = abs(radar["x"] - x)
+            dy = abs(radar["y"] - y)
+            if dx > dx_limit or dy > RADAR_MATCH_DY:
+                continue
+            score = dx + dy * 4.0
+            if score < best_score:
+                best_score = score
+                best = radar
 
-    # A stationary divider/guardrail seen from a moving car has vRel ~= -vEgo.
-    # Preserve slow/stopped real vehicles if the vision model also supports the object.
-    if ego_speed >= SIDE_MOVING_EGO_MPS:
-        estimated_world_speed = ego_speed + float(car.get("v", 0.0))
-        if abs(estimated_world_speed) < SIDE_MIN_WORLD_SPEED_MPS and not model_matches_car(car, model_lead_list):
-            return False
-    return True
-
-
-def _same_side_object(previous, current):
-    if previous is None or current is None:
-        return False
-    return abs(previous["x"] - current["x"]) <= SIDE_MATCH_DX and \
-           abs(previous["y"] - current["y"]) <= SIDE_MATCH_DY
-
-
-def stabilize_side_cars(raw_cars, side_tracks, now, ego_speed, model_lead_list,
-                        left_blindspot=False, right_blindspot=False):
-    """Debounce side leads: 2 hits to appear, 0.55 s dropout hold to avoid flicker."""
-    output = [c for c in raw_cars if c.get("source") not in ("commaLeadLeft", "commaLeadRight")]
-    by_source = {c.get("source"): c for c in raw_cars}
-
-    for source, blindspot in (("commaLeadLeft", left_blindspot), ("commaLeadRight", right_blindspot)):
-        state = side_tracks.setdefault(source, {"car": None, "hits": 0, "visible": False, "last_seen": 0.0})
-        candidate = by_source.get(source)
-        if candidate is not None and not side_candidate_plausible(candidate, ego_speed, model_lead_list, blindspot):
-            candidate = None
-
-        if candidate is not None:
-            if _same_side_object(state["car"], candidate):
-                state["hits"] += 1
-            else:
-                state["hits"] = 1
-            state["car"] = candidate
-            state["last_seen"] = now
-            if state["hits"] >= SIDE_CONFIRM_FRAMES or blindspot:
-                state["visible"] = True
-        elif state["visible"] and state["car"] is not None and now - state["last_seen"] <= SIDE_HOLD_SEC:
-            pass
+        if best is not None:
+            cx, cy, cv = best["x"], best["y"], best["v"]
+            support = "radar%d" % best["track_id"] if best["track_id"] >= 0 else "radar"
         else:
-            state["car"] = None
-            state["hits"] = 0
-            state["visible"] = False
+            cx, cy = x, y
+            cv = float(lead.get("v", 0.0)) - float(ego_speed)
+            support = "vision"
 
-        if state["visible"] and state["car"] is not None:
-            output.append(state["car"])
+        candidates.append(dict(x=cx, y=cy, v=cv, p=p, source=support, type="car"))
+    return candidates
 
+
+def stabilize_vehicle_tracks(candidates, tracks, now, next_track_id):
+    """Stable display tracking: no hard vehicle-count limit, short dropout hold, smooth position updates."""
+    available_ids = set(tracks.keys())
+    assignments = []
+
+    # Match closest existing display track first. This avoids jumps if model lead indices reorder.
+    for candidate in sorted(candidates, key=lambda c: -float(c.get("p", 0.0))):
+        best_id = None
+        best_score = float("inf")
+        for track_id in available_ids:
+            state = tracks[track_id]
+            dx = abs(state["x"] - candidate["x"])
+            dy = abs(state["y"] - candidate["y"])
+            if dx > TRACK_MATCH_DX or dy > TRACK_MATCH_DY:
+                continue
+            score = dx + dy * 5.0
+            if score < best_score:
+                best_score = score
+                best_id = track_id
+        if best_id is None:
+            best_id = next_track_id[0]
+            next_track_id[0] += 1
+            tracks[best_id] = dict(x=candidate["x"], y=candidate["y"], v=candidate["v"], p=candidate["p"],
+                                   hits=0, visible=False, last_seen=now)
+        else:
+            available_ids.remove(best_id)
+        assignments.append((best_id, candidate))
+
+    touched = set()
+    for track_id, candidate in assignments:
+        state = tracks[track_id]
+        if state["hits"] == 0:
+            state["x"] = candidate["x"]
+            state["y"] = candidate["y"]
+        else:
+            state["x"] += (candidate["x"] - state["x"]) * TRACK_SMOOTH_X
+            state["y"] += (candidate["y"] - state["y"]) * TRACK_SMOOTH_Y
+        state["v"] = candidate["v"]
+        state["p"] = candidate["p"]
+        state["hits"] += 1
+        state["last_seen"] = now
+        if state["hits"] >= TRACK_CONFIRM_FRAMES:
+            state["visible"] = True
+        touched.add(track_id)
+
+    output = []
+    expired = []
+    for track_id, state in tracks.items():
+        age = now - state["last_seen"]
+        if track_id not in touched and age > TRACK_HOLD_SEC:
+            expired.append(track_id)
+            continue
+        if state["visible"] and age <= TRACK_HOLD_SEC:
+            output.append(dict(x=state["x"], y=state["y"], v=state["v"], p=state["p"],
+                               source="cameraTrack%d" % track_id, type="car"))
+    for track_id in expired:
+        tracks.pop(track_id, None)
     return output
 
 
@@ -283,19 +353,18 @@ def main():
         from cereal.services import SERVICE_LIST
         if "selfdriveState" in SERVICE_LIST:
             services.append("selfdriveState")
-        if "liveTracks" in SERVICE_LIST:
-            services.append("liveTracks")
     except ImportError:
         pass
 
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.14 side-stable started; 15 Hz TX + side debounce + stationary-echo filter", flush=True)
+    print("CarrotVision bridge v2.15 all-vehicles-stable started; 15 Hz TX + camera-gated vehicles + no UI count cap", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     discovery = open_discovery_socket()
     clients = {}
-    side_tracks = {}
+    display_tracks = {}
+    next_track_id = [1]
 
     while True:
         sm.update(50)
@@ -309,11 +378,9 @@ def main():
         left_blindspot = bool(getattr(cs, "leftBlindspot", False))
         right_blindspot = bool(getattr(cs, "rightBlindspot", False))
         raw_model_leads = model_leads(model)
-        raw_radar_points = radar_points(sm["liveTracks"]) if "liveTracks" in services and fresh(sm, "liveTracks", now) else []
-
-        raw_cars = comma_ui_cars(sm["radarState"]) if fresh(sm, "radarState", now) else []
-        cars = stabilize_side_cars(raw_cars, side_tracks, now, float(cs.vEgo), raw_model_leads,
-                                   left_blindspot, right_blindspot)
+        radar_state = sm["radarState"] if fresh(sm, "radarState", now) else None
+        candidates = camera_supported_candidates(raw_model_leads, radar_state, float(cs.vEgo))
+        cars = stabilize_vehicle_tracks(candidates, display_tracks, now, next_track_id)
 
         lanes = [dict(p=float(prob), pts=points(line))
                  for line, prob in zip(model.laneLines, model.laneLineProbs)]
@@ -325,7 +392,7 @@ def main():
                       brakeLights=optional_bool(cs, "brakeLights"),
                       leftBlinker=bool(cs.leftBlinker), rightBlinker=bool(cs.rightBlinker),
                       leftBlindspot=left_blindspot, rightBlindspot=right_blindspot,
-                      cars=cars, modelLeads=raw_model_leads, radarPoints=raw_radar_points,
+                      cars=cars, modelLeads=raw_model_leads, radarPoints=[],
                       path=points(model.position), lanes=lanes)
         try:
             data = json.dumps(packet, allow_nan=False, separators=(",", ":")).encode()
@@ -334,7 +401,7 @@ def main():
                 sock.sendto(data, target)
             sent += 1
             if sent == 1:
-                print("Sending fresh Comma perception data at %.0f Hz to %s" % (TX_HZ, active_targets), flush=True)
+                print("Sending camera-confirmed vehicle display data at %.0f Hz to %s" % (TX_HZ, active_targets), flush=True)
         except (OSError, ValueError) as error:
             print(error, flush=True)
         time.sleep(TX_INTERVAL)
