@@ -10,6 +10,7 @@ import android.view.WindowManager;
 public class MainActivity extends Activity {
   private UdpReceiver receiver;
   private WifiManager.MulticastLock multicastLock;
+  private WifiManager.WifiLock wifiLock;
 
   @Override public void onCreate(Bundle state) {
     super.onCreate(state);
@@ -20,10 +21,18 @@ public class MainActivity extends Activity {
         View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
     HudView hud = new HudView(this);
     setContentView(hud);
+
     WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
     multicastLock = wifi.createMulticastLock("carrot-vision");
     multicastLock.setReferenceCounted(false);
     multicastLock.acquire();
+
+    try {
+      wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "carrot-vision-high-perf");
+      wifiLock.setReferenceCounted(false);
+      wifiLock.acquire();
+    } catch (Exception ignored) { }
+
     receiver = new UdpReceiver(8855, hud::setFrame);
     receiver.start();
   }
@@ -31,7 +40,7 @@ public class MainActivity extends Activity {
   @Override protected void onDestroy() {
     if (receiver != null) receiver.close();
     if (multicastLock != null && multicastLock.isHeld()) multicastLock.release();
+    if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
     super.onDestroy();
   }
 }
-
