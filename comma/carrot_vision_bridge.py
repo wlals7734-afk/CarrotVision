@@ -12,6 +12,11 @@ sys.path.insert(0, root)
 sys.path.insert(1, os.path.join(root, "openpilot"))
 import cereal.messaging as messaging
 
+DISCOVERY_PORT = 8856
+DATA_PORT = int(os.environ.get("CARROT_VISION_PORT", "8855"))
+DISCOVERY_MAGIC = b"CV_DISCOVER_V1"
+CLIENT_TTL = 12.0
+
 
 def points(line):
     result = []
@@ -147,6 +152,41 @@ def traffic_state(sm, now):
     return 0
 
 
+def open_discovery_socket():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    s.bind(("", DISCOVERY_PORT))
+    s.setblocking(False)
+    return s
+
+
+def update_clients(discovery, clients, now):
+    while True:
+        try:
+            payload, addr = discovery.recvfrom(256)
+        except BlockingIOError:
+            break
+        except OSError:
+            break
+        if payload.startswith(DISCOVERY_MAGIC):
+            ip = addr[0]
+            first = ip not in clients
+            clients[ip] = now
+            if first:
+                print("CarrotVision receiver discovered at %s:%d" % (ip, DATA_PORT), flush=True)
+    expired = [ip for ip, seen in clients.items() if now - seen > CLIENT_TTL]
+    for ip in expired:
+        clients.pop(ip, None)
+
+
+def targets(clients):
+    if clients:
+        return [(ip, DATA_PORT) for ip in sorted(clients)]
+    host = os.environ.get("CARROT_VISION_HOST", "255.255.255.255")
+    return [(host, DATA_PORT)]
+
+
 def main():
     services = ["carState", "modelV2", "controlsState", "radarState", "longitudinalPlan"]
     try:
@@ -160,15 +200,16 @@ def main():
 
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.9 started; selected leads + model leads + live radar tracks + lane confidence", flush=True)
+    print("CarrotVision bridge v2.10 mirror started; auto-discovery + selected Comma leads + model/radar diagnostics", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    target = (os.environ.get("CARROT_VISION_HOST", "255.255.255.255"),
-              int(os.environ.get("CARROT_VISION_PORT", "8855")))
+    discovery = open_discovery_socket()
+    clients = {}
 
     while True:
         sm.update(50)
         now = time.monotonic()
+        update_clients(discovery, clients, now)
         if not (fresh(sm, "carState", now) and fresh(sm, "modelV2", now)):
             time.sleep(0.05)
             continue
@@ -194,10 +235,13 @@ def main():
                       cars=cars, modelLeads=raw_model_leads, radarPoints=raw_radar_points,
                       path=points(model.position), lanes=lanes)
         try:
-            sock.sendto(json.dumps(packet, allow_nan=False, separators=(",", ":")).encode(), target)
+            data = json.dumps(packet, allow_nan=False, separators=(",", ":")).encode()
+            active_targets = targets(clients)
+            for target in active_targets:
+                sock.sendto(data, target)
             sent += 1
             if sent == 1:
-                print("Sending fresh Comma perception data to %s:%s" % target, flush=True)
+                print("Sending fresh Comma perception data to %s" % (active_targets,), flush=True)
         except (OSError, ValueError) as error:
             print(error, flush=True)
         time.sleep(0.05)
