@@ -57,17 +57,12 @@ def optional_field(obj, name, default=None):
 
 
 def _lead_to_car(lead, source):
-    """Convert one Comma-selected lead to HUD coordinates.
-
-    This intentionally does not re-classify, score, or reject a valid selected
-    lead based on speed/model probability. If Comma says status=True, CarrotVision
-    mirrors it. Only malformed/out-of-display-range values are dropped.
-    """
+    """Convert one Comma-selected lead to HUD coordinates without re-classifying it."""
     if lead is None or not optional_field(lead, "status", False):
         return None
     try:
         x = float(optional_field(lead, "dRel", 0.0))
-        # radarState yRel is positive LEFT; HUD lateral is positive RIGHT.
+        # radarState yRel is positive LEFT; HUD/model lateral is positive RIGHT.
         y = -float(optional_field(lead, "yRel", 0.0))
         v = float(optional_field(lead, "vRel", 0.0))
     except (TypeError, ValueError, OverflowError):
@@ -80,15 +75,9 @@ def _lead_to_car(lead, source):
 
 
 def comma_ui_cars(radar_state):
-    """Mirror only the lead slots selected by Comma/CarrotPilot itself.
-
-    Raw leadsLeft/leadsRight/leadsCenter target lists are intentionally ignored.
-    leadOne/leadTwo/leadLeft/leadRight are copied as-is when their status is true.
-    CarrotVision performs no vehicle-confidence or motion filtering here.
-    """
+    """Mirror only lead slots selected by Comma/CarrotPilot itself."""
     if radar_state is None:
         return []
-
     result = []
     for field, source in (
         ("leadOne", "commaLeadOne"),
@@ -99,6 +88,54 @@ def comma_ui_cars(radar_state):
         car = _lead_to_car(optional_field(radar_state, field), source)
         if car is not None:
             result.append(car)
+    return result
+
+
+def model_leads(model):
+    """Mirror raw modelV2.leadsV3 candidates, preserving their probability."""
+    result = []
+    if model is None:
+        return result
+    for index, lead in enumerate(optional_field(model, "leadsV3", ())):
+        try:
+            xs = optional_field(lead, "x", ())
+            ys = optional_field(lead, "y", ())
+            vs = optional_field(lead, "v", ())
+            if len(xs) == 0 or len(ys) == 0:
+                continue
+            x = float(xs[0])
+            y = float(ys[0])
+            v = float(vs[0]) if len(vs) else 0.0
+            p = float(optional_field(lead, "prob", 0.0))
+        except (TypeError, ValueError, OverflowError, IndexError):
+            continue
+        if not all(math.isfinite(value) for value in (x, y, v, p)):
+            continue
+        if not (0.0 <= x <= 150.0 and abs(y) <= 10.0):
+            continue
+        result.append(dict(x=x, y=y, v=v, p=max(0.0, min(1.0, p)), source="modelLead%d" % index))
+    return result
+
+
+def radar_points(live_tracks):
+    """Mirror raw liveTracks radar returns. These are radar points, not vehicle classifications."""
+    result = []
+    if live_tracks is None:
+        return result
+    for point in optional_field(live_tracks, "points", ()):
+        try:
+            x = float(optional_field(point, "dRel", 0.0))
+            y = -float(optional_field(point, "yRel", 0.0))
+            v = float(optional_field(point, "vRel", 0.0))
+            measured = bool(optional_field(point, "measured", False))
+            source = str(optional_field(point, "radarSource", "unknown"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not all(math.isfinite(value) for value in (x, y, v)):
+            continue
+        if not (0.0 <= x <= 150.0 and abs(y) <= 12.0):
+            continue
+        result.append(dict(x=x, y=y, v=v, measured=measured, source=source))
     return result
 
 
@@ -116,12 +153,14 @@ def main():
         from cereal.services import SERVICE_LIST
         if "selfdriveState" in SERVICE_LIST:
             services.append("selfdriveState")
+        if "liveTracks" in SERVICE_LIST:
+            services.append("liveTracks")
     except ImportError:
         pass
 
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.8 started; Comma-selected leads + raw model lane confidence", flush=True)
+    print("CarrotVision bridge v2.9 started; selected leads + model leads + live radar tracks + lane confidence", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     target = (os.environ.get("CARROT_VISION_HOST", "255.255.255.255"),
@@ -139,10 +178,9 @@ def main():
         right_blindspot = bool(getattr(cs, "rightBlindspot", False))
 
         cars = comma_ui_cars(sm["radarState"]) if fresh(sm, "radarState", now) else []
+        raw_model_leads = model_leads(model)
+        raw_radar_points = radar_points(sm["liveTracks"]) if "liveTracks" in services and fresh(sm, "liveTracks", now) else []
 
-        # Preserve modelV2 laneLineProbs exactly. Android uses the probability as
-        # visual opacity so low-confidence lane perception remains visible instead
-        # of being hidden by an app-side threshold.
         lanes = [dict(p=float(prob), pts=points(line))
                  for line, prob in zip(model.laneLines, model.laneLineProbs)]
 
@@ -153,7 +191,8 @@ def main():
                       brakeLights=optional_bool(cs, "brakeLights"),
                       leftBlinker=bool(cs.leftBlinker), rightBlinker=bool(cs.rightBlinker),
                       leftBlindspot=left_blindspot, rightBlindspot=right_blindspot,
-                      cars=cars, path=points(model.position), lanes=lanes)
+                      cars=cars, modelLeads=raw_model_leads, radarPoints=raw_radar_points,
+                      path=points(model.position), lanes=lanes)
         try:
             sock.sendto(json.dumps(packet, allow_nan=False, separators=(",", ":")).encode(), target)
             sent += 1
