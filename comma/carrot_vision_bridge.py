@@ -16,6 +16,8 @@ DISCOVERY_PORT = 8856
 DATA_PORT = int(os.environ.get("CARROT_VISION_PORT", "8855"))
 DISCOVERY_MAGIC = b"CV_DISCOVER_V1"
 CLIENT_TTL = 12.0
+TX_HZ = 15.0
+TX_INTERVAL = 1.0 / TX_HZ
 
 
 def points(line):
@@ -200,7 +202,7 @@ def main():
 
     sm = messaging.SubMaster(services)
     sent = 0
-    print("CarrotVision bridge v2.10 mirror started; auto-discovery + selected Comma leads + model/radar diagnostics", flush=True)
+    print("CarrotVision bridge v2.13 low-load started; 15 Hz TX + auto-discovery + selected Comma leads", flush=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     discovery = open_discovery_socket()
@@ -241,10 +243,10 @@ def main():
                 sock.sendto(data, target)
             sent += 1
             if sent == 1:
-                print("Sending fresh Comma perception data to %s" % (active_targets,), flush=True)
+                print("Sending fresh Comma perception data at %.0f Hz to %s" % (TX_HZ, active_targets), flush=True)
         except (OSError, ValueError) as error:
             print(error, flush=True)
-        time.sleep(0.05)
+        time.sleep(TX_INTERVAL)
 
 
 if __name__ == "__main__":
